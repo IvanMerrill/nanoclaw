@@ -94,6 +94,16 @@ function buildVolumeMounts(
       });
     }
 
+    // Allow the agent to update the project's root CLAUDE.md
+    const claudeMd = path.join(projectRoot, 'CLAUDE.md');
+    if (fs.existsSync(claudeMd)) {
+      mounts.push({
+        hostPath: claudeMd,
+        containerPath: '/workspace/project/CLAUDE.md',
+        readonly: false,
+      });
+    }
+
     // Main also gets its group folder as the working directory
     mounts.push({
       hostPath: groupDir,
@@ -177,6 +187,16 @@ function buildVolumeMounts(
     mounts.push({
       hostPath: gmailDir,
       containerPath: '/home/node/.gmail-mcp',
+      readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+
+  // Calendar credentials directory (for calendar MCP inside the container)
+  const calendarDir = path.join(homeDir, '.calendar-mcp');
+  if (fs.existsSync(calendarDir)) {
+    mounts.push({
+      hostPath: calendarDir,
+      containerPath: '/home/node/.calendar-mcp',
       readonly: false, // MCP may need to refresh OAuth tokens
     });
   }

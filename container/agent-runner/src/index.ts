@@ -409,6 +409,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
+        'mcp__calendar__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -428,6 +429,10 @@ async function runQuery(
           command: 'npx',
           args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
         },
+        calendar: {
+          command: 'npx',
+          args: ['-y', '@gongrzhe/server-calendar-autoauth-mcp']
+        }
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
