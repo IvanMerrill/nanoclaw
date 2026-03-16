@@ -59,9 +59,7 @@ export class TelegramChannel implements Channel {
 
   async connect(): Promise<void> {
     const proxyUrl = process.env.https_proxy || process.env.HTTPS_PROXY;
-    const agent = proxyUrl
-      ? new HttpsProxyAgent(proxyUrl)
-      : https.globalAgent;
+    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : https.globalAgent;
 
     this.bot = new Bot(this.botToken, {
       client: {
@@ -223,7 +221,13 @@ export class TelegramChannel implements Channel {
 
       const isGroup =
         ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
 
       // Pick the highest resolution photo (last element in the array)
       const photos = ctx.message.photo;
