@@ -106,6 +106,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add allowed_tools column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN allowed_tools TEXT DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_main column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -368,8 +377,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, allowed_tools, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -379,6 +388,7 @@ export function createTask(
     task.schedule_type,
     task.schedule_value,
     task.context_mode || 'isolated',
+    task.allowed_tools ?? null,
     task.next_run,
     task.status,
     task.created_at,
@@ -410,7 +420,12 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
-      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'
+      | 'prompt'
+      | 'schedule_type'
+      | 'schedule_value'
+      | 'next_run'
+      | 'status'
+      | 'allowed_tools'
     >
   >,
 ): void {
@@ -436,6 +451,10 @@ export function updateTask(
   if (updates.status !== undefined) {
     fields.push('status = ?');
     values.push(updates.status);
+  }
+  if (updates.allowed_tools !== undefined) {
+    fields.push('allowed_tools = ?');
+    values.push(updates.allowed_tools);
   }
 
   if (fields.length === 0) return;

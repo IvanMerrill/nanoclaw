@@ -50,11 +50,13 @@ function setupMockHttp(responseBody: string, statusCode = 200) {
     destroy: vi.fn(),
   };
 
-  mockRequest.mockImplementation((_opts: unknown, callback: (res: typeof mockRes) => void) => {
-    // Call the callback asynchronously to simulate real behavior
-    Promise.resolve().then(() => callback(mockRes));
-    return mockReq;
-  });
+  mockRequest.mockImplementation(
+    (_opts: unknown, callback: (res: typeof mockRes) => void) => {
+      // Call the callback asynchronously to simulate real behavior
+      Promise.resolve().then(() => callback(mockRes));
+      return mockReq;
+    },
+  );
 
   return { mockReq, mockRes };
 }

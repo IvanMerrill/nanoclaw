@@ -42,6 +42,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  allowedTools?: string[]; // If provided, overrides default tool list in agent-runner
 }
 
 export interface ContainerOutput {

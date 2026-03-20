@@ -74,8 +74,12 @@ describe('TRIGGER_PATTERN', () => {
   });
 
   it('matches case-insensitively', () => {
-    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME.toUpperCase()} hello`)).toBe(true);
-    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME.toLowerCase()} hello`)).toBe(true);
+    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME.toUpperCase()} hello`)).toBe(
+      true,
+    );
+    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME.toLowerCase()} hello`)).toBe(
+      true,
+    );
   });
 
   it('does not match in middle of string', () => {
@@ -89,7 +93,9 @@ describe('TRIGGER_PATTERN', () => {
   });
 
   it('matches name followed by space', () => {
-    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME} what time is it`)).toBe(true);
+    expect(TRIGGER_PATTERN.test(`@${ASSISTANT_NAME} what time is it`)).toBe(
+      true,
+    );
   });
 
   it('matches name at end of string', () => {

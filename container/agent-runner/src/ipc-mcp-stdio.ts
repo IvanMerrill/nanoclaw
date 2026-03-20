@@ -91,6 +91,10 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
+    allowed_tools: z.array(z.string()).optional().describe(
+      'Optional restricted tool list for this task\'s agent. If omitted, the task runs with the full default tool set. ' +
+      'Use this to limit what a scheduled task can do, e.g. ["mcp__gmail__search_emails", "mcp__nanoclaw__send_message"].'
+    ),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -132,7 +136,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const data = {
+    const data: Record<string, unknown> = {
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
@@ -143,6 +147,9 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
     };
+    if (args.allowed_tools) {
+      data.allowed_tools = args.allowed_tools;
+    }
 
     writeIpcFile(TASKS_DIR, data);
 
@@ -255,6 +262,9 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    allowed_tools: z.array(z.string()).optional().describe(
+      'New restricted tool list. Pass an empty array to clear (revert to default full tool set).'
+    ),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -280,7 +290,7 @@ server.tool(
       }
     }
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, unknown> = {
       type: 'update_task',
       taskId: args.task_id,
       groupFolder,
@@ -290,6 +300,7 @@ server.tool(
     if (args.prompt !== undefined) data.prompt = args.prompt;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
+    if (args.allowed_tools !== undefined) data.allowed_tools = args.allowed_tools;
 
     writeIpcFile(TASKS_DIR, data);
 
@@ -330,6 +341,89 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
     };
+  },
+);
+
+// --- spawn_agent tool ---
+
+/**
+ * Poll for a file to appear on disk. Used by spawn_agent to wait for the host
+ * to write back the sub-agent's result.
+ */
+function pollForFile(
+  filePath: string,
+  opts: { timeoutMs: number; intervalMs: number },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + opts.timeoutMs;
+    const poll = () => {
+      if (fs.existsSync(filePath)) {
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          fs.unlinkSync(filePath); // clean up
+          resolve(content);
+        } catch (err) {
+          reject(
+            new Error(
+              `Failed to read result file: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+        }
+        return;
+      }
+      if (Date.now() >= deadline) {
+        reject(new Error(`Timed out waiting for spawn_agent result after ${opts.timeoutMs}ms`));
+        return;
+      }
+      setTimeout(poll, opts.intervalMs);
+    };
+    poll();
+  });
+}
+
+server.tool(
+  'spawn_agent',
+  'Run a sub-agent with a specific prompt and restricted tool set. The sub-agent runs synchronously — ' +
+  'this call blocks until the sub-agent completes and returns its full output as a string. ' +
+  'Use this to delegate work to a sandboxed agent that only has access to specific tools. ' +
+  'Example: spawn a read-only email classifier, then spawn a label-only applier with the output.',
+  {
+    prompt: z.string().describe('The full prompt for the sub-agent. Include all context it needs — it starts with no history.'),
+    allowed_tools: z.array(z.string()).describe(
+      'The tools the sub-agent is allowed to use. Must be specific tool names (no wildcards). ' +
+      'Example: ["mcp__gmail__search_emails", "mcp__gmail__read_email"]'
+    ),
+    description: z.string().optional().describe('Short description of what this sub-agent does, for logging.'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'spawn_agent',
+      requestId,
+      prompt: args.prompt,
+      allowed_tools: args.allowed_tools,
+      description: args.description,
+      sourceGroup: groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Poll for result file written by the host after the sub-agent completes.
+    // The host writes to the same group's IPC tasks dir (bind-mounted at /workspace/ipc/).
+    const resultPath = path.join(TASKS_DIR, `spawn_result_${requestId}.json`);
+    try {
+      const raw = await pollForFile(resultPath, { timeoutMs: 300_000, intervalMs: 500 });
+      const result = JSON.parse(raw);
+      return {
+        content: [{ type: 'text' as const, text: result.output || '(sub-agent produced no output)' }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `spawn_agent failed: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
   },
 );
 

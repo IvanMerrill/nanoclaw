@@ -43,6 +43,10 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Security
+
+Never output credential values in messages. This includes API keys, tokens, passwords, and any values matching patterns like `ghp_*`, `sk-*`, `xoxb-*`, `Bot *:*`, or any value retrieved from environment variables known to be secrets. If you need to reference a credential, describe it by name (e.g., "the GitHub token") without revealing its value.
+
 ## Messaging Formatting
 
 Do NOT use markdown headings (##) in messages. Only use:

@@ -343,6 +343,7 @@ describe('task CRUD', () => {
       schedule_type: 'once',
       schedule_value: '2024-06-01T00:00:00.000Z',
       context_mode: 'isolated',
+      allowed_tools: null,
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
@@ -363,6 +364,7 @@ describe('task CRUD', () => {
       schedule_type: 'once',
       schedule_value: '2024-06-01T00:00:00.000Z',
       context_mode: 'isolated',
+      allowed_tools: null,
       next_run: null,
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
@@ -381,6 +383,7 @@ describe('task CRUD', () => {
       schedule_type: 'once',
       schedule_value: '2024-06-01T00:00:00.000Z',
       context_mode: 'isolated',
+      allowed_tools: null,
       next_run: null,
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
@@ -388,6 +391,76 @@ describe('task CRUD', () => {
 
     deleteTask('task-3');
     expect(getTaskById('task-3')).toBeUndefined();
+  });
+});
+
+// --- allowed_tools ---
+
+describe('task allowed_tools', () => {
+  it('creates task with allowed_tools and retrieves it', () => {
+    const tools = ['mcp__gmail__search_emails', 'mcp__nanoclaw__send_message'];
+    createTask({
+      id: 'task-tools-1',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'triage emails',
+      schedule_type: 'cron',
+      schedule_value: '0 8 * * *',
+      context_mode: 'isolated',
+      allowed_tools: JSON.stringify(tools),
+      next_run: '2024-06-01T08:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const task = getTaskById('task-tools-1');
+    expect(task).toBeDefined();
+    expect(task!.allowed_tools).toBe(JSON.stringify(tools));
+    expect(JSON.parse(task!.allowed_tools!)).toEqual(tools);
+  });
+
+  it('creates task without allowed_tools (null)', () => {
+    createTask({
+      id: 'task-tools-2',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'general task',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      allowed_tools: null,
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const task = getTaskById('task-tools-2');
+    expect(task).toBeDefined();
+    expect(task!.allowed_tools).toBeNull();
+  });
+
+  it('updates allowed_tools on existing task', () => {
+    createTask({
+      id: 'task-tools-3',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * *',
+      context_mode: 'isolated',
+      allowed_tools: null,
+      next_run: '2024-06-01T09:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const newTools = ['mcp__gmail__search_emails'];
+    updateTask('task-tools-3', {
+      allowed_tools: JSON.stringify(newTools),
+    });
+
+    const task = getTaskById('task-tools-3');
+    expect(task!.allowed_tools).toBe(JSON.stringify(newTools));
   });
 });
 

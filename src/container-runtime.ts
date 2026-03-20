@@ -9,7 +9,7 @@ import os from 'os';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
-export const CONTAINER_RUNTIME_BIN = 'container';
+export const CONTAINER_RUNTIME_BIN = 'docker';
 
 /** Hostname containers use to reach the host machine. */
 export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
@@ -68,62 +68,50 @@ export function stopContainer(name: string): string {
 /** Ensure the container runtime is running, starting it if needed. */
 export function ensureContainerRuntimeRunning(): void {
   try {
-    execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
+    execSync(`${CONTAINER_RUNTIME_BIN} info`, { stdio: 'pipe' });
     logger.debug('Container runtime already running');
-  } catch {
-    logger.info('Starting container runtime...');
-    try {
-      execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
-        stdio: 'pipe',
-        timeout: 30000,
-      });
-      logger.info('Container runtime started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start container runtime');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
-      );
-      console.error(
-        '║  FATAL: Container runtime failed to start                      ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without a container runtime. To fix:        ║',
-      );
-      console.error(
-        '║  1. Ensure Apple Container is installed                        ║',
-      );
-      console.error(
-        '║  2. Run: container system start                                ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                           ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Container runtime is required but failed to start');
-    }
+  } catch (err) {
+    logger.error({ err }, 'Container runtime not available');
+    console.error(
+      '\n╔════════════════════════════════════════════════════════════════╗',
+    );
+    console.error(
+      '║  FATAL: Container runtime not available                        ║',
+    );
+    console.error(
+      '║                                                                ║',
+    );
+    console.error(
+      '║  Agents cannot run without a container runtime. To fix:        ║',
+    );
+    console.error(
+      `║  1. Ensure ${CONTAINER_RUNTIME_BIN} is installed and running${' '.repeat(Math.max(0, 24 - CONTAINER_RUNTIME_BIN.length))}║`,
+    );
+    console.error(
+      '║  2. Restart NanoClaw                                           ║',
+    );
+    console.error(
+      '╚════════════════════════════════════════════════════════════════╝\n',
+    );
+    throw new Error('Container runtime is required but not available');
   }
 }
 
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
   try {
-    const output = execSync(`${CONTAINER_RUNTIME_BIN} ls --format json`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const containers: { status: string; configuration: { id: string } }[] =
-      JSON.parse(output || '[]');
-    const orphans = containers
-      .filter(
-        (c) =>
-          c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'),
-      )
-      .map((c) => c.configuration.id);
+    // Use --filter to get only nanoclaw containers, --format for names
+    const output = execSync(
+      `${CONTAINER_RUNTIME_BIN} ps --filter "name=nanoclaw-" --format "{{.Names}}"`,
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+      },
+    );
+    const orphans = output
+      .trim()
+      .split('\n')
+      .filter((name) => name.startsWith('nanoclaw-'));
     for (const name of orphans) {
       try {
         execSync(stopContainer(name), { stdio: 'pipe' });

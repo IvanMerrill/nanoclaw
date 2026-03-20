@@ -61,6 +61,7 @@ export interface ScheduledTask {
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
+  allowed_tools: string | null; // JSON array or null (null = default full tool list)
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

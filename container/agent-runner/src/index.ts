@@ -27,7 +27,21 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  allowedTools?: string[]; // If provided, overrides DEFAULT_ALLOWED_TOOLS
 }
+
+const DEFAULT_ALLOWED_TOOLS = [
+  'Bash',
+  'Read', 'Write', 'Edit', 'Glob', 'Grep',
+  'WebSearch', 'WebFetch',
+  'Task', 'TaskOutput', 'TaskStop',
+  'TeamCreate', 'TeamDelete', 'SendMessage',
+  'TodoWrite', 'ToolSearch', 'Skill',
+  'NotebookEdit',
+  'mcp__nanoclaw__*',
+  'mcp__gmail__*',
+  'mcp__calendar__*',
+];
 
 interface ContainerOutput {
   status: 'success' | 'error';
@@ -415,18 +429,7 @@ async function runQuery(
       systemPrompt: systemPromptAppend
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__gmail__*',
-        'mcp__calendar__*',
-      ],
+      allowedTools: containerInput.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

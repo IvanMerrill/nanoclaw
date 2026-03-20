@@ -257,10 +257,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Schedule a lightweight ack if the agent takes more than 10s to respond
   const lastMessage = missedMessages[missedMessages.length - 1];
-  const cancelAck = scheduleAck(lastMessage.content, ASSISTANT_NAME, async (text) => {
-    await channel.sendMessage(chatJid, text);
-    logger.debug({ group: group.name }, `Ack sent: ${text}`);
-  });
+  const cancelAck = scheduleAck(
+    lastMessage.content,
+    ASSISTANT_NAME,
+    async (text) => {
+      await channel.sendMessage(chatJid, text);
+      logger.debug({ group: group.name }, `Ack sent: ${text}`);
+    },
+  );
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result

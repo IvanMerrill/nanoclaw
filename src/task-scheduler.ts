@@ -179,6 +179,9 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        allowedTools: task.allowed_tools
+          ? JSON.parse(task.allowed_tools)
+          : undefined,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

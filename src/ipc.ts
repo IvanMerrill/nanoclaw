@@ -3,9 +3,14 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { AvailableGroup } from './container-runner.js';
+import { ASSISTANT_NAME, DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  AvailableGroup,
+  ContainerOutput,
+  runContainerAgent,
+} from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { resolveGroupIpcPath } from './group-folder.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -162,6 +167,7 @@ export async function processTaskIpc(
     schedule_type?: string;
     schedule_value?: string;
     context_mode?: string;
+    allowed_tools?: string[];
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
@@ -172,6 +178,10 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For spawn_agent
+    requestId?: string;
+    sourceGroup?: string;
+    description?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -263,6 +273,9 @@ export async function processTaskIpc(
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
+          allowed_tools: data.allowed_tools
+            ? JSON.stringify(data.allowed_tools)
+            : null,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
@@ -359,6 +372,8 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
+        if (data.allowed_tools !== undefined)
+          updates.allowed_tools = JSON.stringify(data.allowed_tools);
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {
@@ -420,6 +435,94 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'spawn_agent': {
+      if (!data.requestId || !data.prompt || !data.allowed_tools) {
+        logger.warn({ data }, 'Invalid spawn_agent request — missing fields');
+        break;
+      }
+      // Only main group can spawn sub-agents
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized spawn_agent attempt blocked',
+        );
+        break;
+      }
+
+      // Look up the group from registered groups
+      const spawnGroup = Object.values(registeredGroups).find(
+        (g) => g.folder === sourceGroup,
+      );
+      if (!spawnGroup) {
+        logger.error(
+          { sourceGroup },
+          'spawn_agent: source group not found in registered groups',
+        );
+        break;
+      }
+
+      const spawnDesc = data.description || 'sub-agent';
+      logger.info(
+        { requestId: data.requestId, sourceGroup, description: spawnDesc },
+        'Spawning sub-agent',
+      );
+
+      // Collect all output from the sub-agent
+      let spawnOutput = '';
+      try {
+        await runContainerAgent(
+          spawnGroup,
+          {
+            prompt: data.prompt,
+            groupFolder: sourceGroup,
+            chatJid: data.chatJid || '',
+            isMain: true,
+            isScheduledTask: true,
+            assistantName: ASSISTANT_NAME,
+            allowedTools: data.allowed_tools,
+          },
+          () => {}, // onProcess — not tracking spawned containers in the queue
+          async (streamedOutput: ContainerOutput) => {
+            if (streamedOutput.result) {
+              spawnOutput += streamedOutput.result;
+            }
+          },
+        );
+      } catch (err) {
+        spawnOutput = `Error: ${err instanceof Error ? err.message : String(err)}`;
+        logger.error(
+          { requestId: data.requestId, err },
+          'spawn_agent sub-agent failed',
+        );
+      }
+
+      // Write result file to the spawning agent's IPC directory
+      const resultDir = path.join(
+        resolveGroupIpcPath(sourceGroup),
+        'tasks',
+      );
+      fs.mkdirSync(resultDir, { recursive: true });
+      const resultPath = path.join(
+        resultDir,
+        `spawn_result_${data.requestId}.json`,
+      );
+      fs.writeFileSync(
+        resultPath,
+        JSON.stringify({ output: spawnOutput }),
+      );
+
+      logger.info(
+        {
+          requestId: data.requestId,
+          outputLength: spawnOutput.length,
+        },
+        'spawn_agent result written',
+      );
+
+      // Don't unlink the request file — the outer loop does that
+      break;
+    }
 
     case 'register_group':
       // Only main group can register new groups

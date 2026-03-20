@@ -1,3 +1,4 @@
+import { redactSecrets } from './redact.js';
 import { Channel, NewMessage } from './types.js';
 import { formatLocalTime } from './timezone.js';
 
@@ -31,7 +32,7 @@ export function stripInternalTags(text: string): string {
 export function formatOutbound(rawText: string): string {
   const text = stripInternalTags(rawText);
   if (!text) return '';
-  return text;
+  return redactSecrets(text);
 }
 
 export function routeOutbound(

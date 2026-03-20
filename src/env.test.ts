@@ -62,7 +62,9 @@ describe('readEnvFile', () => {
   });
 
   it('ignores comments and blank lines', () => {
-    mockReadFileSync.mockReturnValue('# comment\n\nFOO=bar\n  # another comment\n');
+    mockReadFileSync.mockReturnValue(
+      '# comment\n\nFOO=bar\n  # another comment\n',
+    );
     const result = readEnvFile(['FOO']);
     expect(result).toEqual({ FOO: 'bar' });
   });
