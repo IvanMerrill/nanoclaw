@@ -67,29 +67,19 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
+    // Project root is read-only — agent code should not be modified
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
-    // Use an empty file instead of /dev/null (Docker may reject /dev/null mounts in sandboxes).
+    // Shadow .env so the agent cannot read host secrets.
+    // Docker supports file-level mounts, so we overlay /dev/null directly.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
-      const emptyEnv = path.join(DATA_DIR, 'empty-env');
-      if (!fs.existsSync(emptyEnv)) {
-        fs.mkdirSync(path.dirname(emptyEnv), { recursive: true });
-        fs.writeFileSync(emptyEnv, '');
-      }
       mounts.push({
-        hostPath: emptyEnv,
+        hostPath: '/dev/null',
         containerPath: '/workspace/project/.env',
         readonly: true,
       });
@@ -362,14 +352,7 @@ function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    if (isMain) {
-      // Main containers start as root so the entrypoint can mount --bind
-      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
-      args.push('-e', `RUN_UID=${hostUid}`);
-      args.push('-e', `RUN_GID=${hostGid}`);
-    } else {
-      args.push('--user', `${hostUid}:${hostGid}`);
-    }
+    args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
