@@ -1,100 +1,100 @@
 /**
  * Acknowledgment messages via a cheap/fast model (Haiku).
- * Sends a brief "thinking..." style message if the main agent
- * hasn't responded within a timeout, so the user knows it's working.
+ * Sends a brief "working on it" message if the main agent hasn't responded
+ * within a delay, then repeats every REPEAT_INTERVAL_MS while still waiting.
+ *
+ * Routes through the local credential proxy so both API-key and OAuth
+ * auth modes work without duplicating auth logic.
  */
-import { request as httpsRequest } from 'https';
+import { request as httpRequest } from 'http';
 
-import { readEnvFile } from './env.js';
+import { CREDENTIAL_PROXY_PORT } from './config.js';
 import { logger } from './logger.js';
 
-const ACK_DELAY_MS = 10_000;
+export const INITIAL_DELAY_MS = 10_000;
+export const REPEAT_INTERVAL_MS = 60_000;
 const ACK_MODEL = 'claude-haiku-4-5-20251001';
 
 /**
  * Start an ack timer. Returns a cancel function.
- * If the main agent responds within ACK_DELAY_MS, call cancel() to suppress the ack.
- * Otherwise, Haiku generates a brief acknowledgment and sendFn delivers it.
+ * Fires once after INITIAL_DELAY_MS, then every REPEAT_INTERVAL_MS until cancelled.
  */
 export function scheduleAck(
   messagePreview: string,
+  assistantName: string,
   sendFn: (text: string) => Promise<void>,
 ): () => void {
   let cancelled = false;
+  let initialTimer: ReturnType<typeof setTimeout> | null = null;
+  let repeatTimer: ReturnType<typeof setInterval> | null = null;
 
   const cancel = () => {
     cancelled = true;
+    if (initialTimer) {
+      clearTimeout(initialTimer);
+      initialTimer = null;
+    }
+    if (repeatTimer) {
+      clearInterval(repeatTimer);
+      repeatTimer = null;
+    }
   };
 
-  setTimeout(async () => {
+  const sendAck = async (isFollowUp: boolean) => {
     if (cancelled) return;
-
     try {
-      const text = await generateAck(messagePreview);
+      const text = await generateAck(messagePreview, assistantName, isFollowUp);
       if (!cancelled && text) {
         await sendFn(text);
       }
     } catch (err) {
       logger.debug({ err }, 'Ack generation failed (non-fatal)');
     }
-  }, ACK_DELAY_MS);
+  };
+
+  // Initial ack after delay
+  initialTimer = setTimeout(async () => {
+    initialTimer = null;
+    if (cancelled) return;
+    await sendAck(false);
+
+    // Then repeat every 60s
+    if (!cancelled) {
+      repeatTimer = setInterval(() => sendAck(true), REPEAT_INTERVAL_MS);
+    }
+  }, INITIAL_DELAY_MS);
 
   return cancel;
 }
 
-async function generateAck(messagePreview: string): Promise<string | null> {
-  const secrets = readEnvFile([
-    'ANTHROPIC_API_KEY',
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-  ]);
-
-  const apiKey = secrets.ANTHROPIC_API_KEY;
-  const oauthToken =
-    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
-
-  if (!apiKey && !oauthToken) {
-    return null;
-  }
-
-  // If OAuth, we need to exchange for a temp API key first.
-  // For simplicity, use the credential proxy which is already running locally.
-  // But the proxy is for containers. Instead, let's call the API directly.
-  // OAuth tokens work as Bearer tokens on the API.
+async function generateAck(
+  messagePreview: string,
+  assistantName: string,
+  isFollowUp: boolean,
+): Promise<string | null> {
+  const prompt = isFollowUp
+    ? `You are a friendly assistant named ${assistantName}. You're still working on the user's request and it's taking a while. Generate a very brief (1 sentence, under 15 words) status update so they know you're still on it. Be casual and natural — no emojis unless it really fits. Don't repeat yourself. Vary your phrasing.\n\nTheir original message: "${messagePreview.slice(0, 300)}"`
+    : `You are a friendly assistant named ${assistantName}. The user just sent you a message and you're about to start working on it, but it will take a moment. Generate a very brief (1 sentence, under 15 words) acknowledgment so they know you're on it. Be casual and natural — no emojis unless it really fits. Reference what they asked about if you can.\n\nTheir message: "${messagePreview.slice(0, 300)}"`;
 
   const body = JSON.stringify({
     model: ACK_MODEL,
     max_tokens: 60,
-    messages: [
-      {
-        role: 'user',
-        content: `You are a friendly assistant named Ren. The user just sent you a message and you're about to start working on it, but it will take a moment. Generate a very brief (1 sentence, under 15 words) acknowledgment so they know you're on it. Be casual and natural — no emojis unless it really fits. Reference what they asked about if you can.
-
-Their message: "${messagePreview.slice(0, 300)}"`,
-      },
-    ],
+    messages: [{ role: 'user', content: prompt }],
   });
 
   return new Promise((resolve) => {
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'content-length': Buffer.byteLength(body).toString(),
-    };
-
-    if (apiKey) {
-      headers['x-api-key'] = apiKey;
-    } else if (oauthToken) {
-      headers['authorization'] = `Bearer ${oauthToken}`;
-    }
-
-    const req = httpsRequest(
+    const req = httpRequest(
       {
-        hostname: 'api.anthropic.com',
-        port: 443,
+        hostname: '127.0.0.1',
+        port: CREDENTIAL_PROXY_PORT,
         path: '/v1/messages',
         method: 'POST',
-        headers,
+        headers: {
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'x-api-key': 'proxy-placeholder',
+          'content-length': Buffer.byteLength(body),
+        },
       },
       (res) => {
         const chunks: Buffer[] = [];

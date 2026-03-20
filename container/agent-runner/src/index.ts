@@ -366,12 +366,28 @@ async function runQuery(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
-  let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  // Load upstream capability template + user overlay as system context.
+  // Template provides tool docs and system behavior (tracked in git, updated from upstream).
+  // User overlay provides personality and personal preferences (gitignored, local only).
+  const systemPromptParts: string[] = [];
+
+  const templatePath = containerInput.isMain
+    ? '/workspace/templates/main.md'
+    : '/workspace/templates/global.md';
+  if (fs.existsSync(templatePath)) {
+    systemPromptParts.push(fs.readFileSync(templatePath, 'utf-8'));
   }
+
+  // Load user's global overlay (personality, preferences) for non-main groups.
+  // Main group's overlay is auto-loaded from cwd (/workspace/group/CLAUDE.md) by the SDK.
+  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+    systemPromptParts.push(fs.readFileSync(globalClaudeMdPath, 'utf-8'));
+  }
+
+  const systemPromptAppend = systemPromptParts.length > 0
+    ? systemPromptParts.join('\n\n---\n\n')
+    : undefined;
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
@@ -396,8 +412,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemPromptAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
         : undefined,
       allowedTools: [
         'Bash',

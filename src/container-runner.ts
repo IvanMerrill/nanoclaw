@@ -140,6 +140,21 @@ function buildVolumeMounts(
     }
   }
 
+  // Upstream capability templates (read-only, tracked in git)
+  // Loaded by the agent-runner as system prompt context for all groups
+  const templatesDir = path.join(projectRoot, 'templates');
+  if (fs.existsSync(templatesDir)) {
+    mounts.push({
+      hostPath: templatesDir,
+      containerPath: '/workspace/templates',
+      readonly: true,
+    });
+  } else {
+    logger.warn(
+      'templates/ directory missing — agents will not see upstream capability docs',
+    );
+  }
+
   // Per-group Claude sessions directory (isolated from other groups)
   // Each group gets their own .claude/ to prevent cross-group session access
   const groupSessionsDir = path.join(
@@ -238,7 +253,8 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
+  // Always sync so code changes (e.g., template loading) take effect immediately
+  if (fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
   }
   mounts.push({
@@ -612,11 +628,7 @@ export async function runContainerAgent(
         // Full input is only included at verbose level to avoid
         // persisting user conversation content on every non-zero exit.
         if (isVerbose) {
-          logLines.push(
-            `=== Input ===`,
-            JSON.stringify(input, null, 2),
-            ``,
-          );
+          logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
         } else {
           logLines.push(
             `=== Input Summary ===`,
