@@ -20,6 +20,10 @@ const DEFAULT_CONFIG: SenderAllowlistConfig = {
   logDenied: true,
 };
 
+let cachedConfig: SenderAllowlistConfig | null = null;
+let cacheLoadedAt = 0;
+const CACHE_TTL_MS = 30_000;
+
 function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
   if (!entry || typeof entry !== 'object') return false;
   const e = entry as Record<string, unknown>;
@@ -33,6 +37,11 @@ function isValidEntry(entry: unknown): entry is ChatAllowlistEntry {
 export function loadSenderAllowlist(
   pathOverride?: string,
 ): SenderAllowlistConfig {
+  // pathOverride bypasses cache (used in tests)
+  if (!pathOverride && cachedConfig && Date.now() - cacheLoadedAt < CACHE_TTL_MS) {
+    return cachedConfig;
+  }
+
   const filePath = pathOverride ?? SENDER_ALLOWLIST_PATH;
 
   let raw: string;
@@ -81,11 +90,18 @@ export function loadSenderAllowlist(
     }
   }
 
-  return {
+  const config: SenderAllowlistConfig = {
     default: obj.default as ChatAllowlistEntry,
     chats,
     logDenied: obj.logDenied !== false,
   };
+
+  if (!pathOverride) {
+    cachedConfig = config;
+    cacheLoadedAt = Date.now();
+  }
+
+  return config;
 }
 
 function getEntry(

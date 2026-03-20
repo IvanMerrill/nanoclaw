@@ -333,12 +333,22 @@ export class TelegramChannel implements Channel {
       if (text.length <= MAX_LENGTH) {
         await sendTelegramMessage(this.bot.api, numericId, text);
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        let offset = 0;
+        while (offset < text.length) {
+          let end = Math.min(offset + MAX_LENGTH, text.length);
+          // If not the last chunk, split at the last newline before the limit
+          if (end < text.length) {
+            const lastNewline = text.lastIndexOf('\n', end);
+            if (lastNewline > offset) {
+              end = lastNewline + 1; // Include the newline in this chunk
+            }
+          }
           await sendTelegramMessage(
             this.bot.api,
             numericId,
-            text.slice(i, i + MAX_LENGTH),
+            text.slice(offset, end),
           );
+          offset = end;
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');

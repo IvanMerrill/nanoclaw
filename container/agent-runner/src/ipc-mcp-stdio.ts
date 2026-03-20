@@ -415,6 +415,8 @@ server.tool(
     try {
       const raw = await pollForFile(resultPath, { timeoutMs: 300_000, intervalMs: 500 });
       const result = JSON.parse(raw);
+      // Clean up result file after reading
+      try { fs.unlinkSync(resultPath); } catch { /* ignore */ }
       return {
         content: [{ type: 'text' as const, text: result.output || '(sub-agent produced no output)' }],
       };

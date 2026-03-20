@@ -34,6 +34,13 @@ describe('redactSecrets', () => {
     expect(redactSecrets(`Auth: ${token}`)).toBe('Auth: [REDACTED]');
   });
 
+  it('redacts Telegram bot tokens in API URLs', () => {
+    const token = 'bot123456789:' + 'A'.repeat(35);
+    expect(redactSecrets(`URL: https://api.telegram.org/file/${token}/photo.jpg`)).toBe(
+      'URL: https://api.telegram.org/file/[REDACTED]/photo.jpg',
+    );
+  });
+
   it('passes through clean text unchanged', () => {
     const text = 'This is a normal message with no secrets.';
     expect(redactSecrets(text)).toBe(text);
@@ -48,5 +55,24 @@ describe('redactSecrets', () => {
 
   it('returns empty string unchanged', () => {
     expect(redactSecrets('')).toBe('');
+  });
+
+  it('redacts Anthropic OAuth tokens with underscores', () => {
+    // Real OAuth tokens contain underscores: sk-ant-oat01-..._...-_iGKjgAA
+    const token = 'sk-ant-oat01-' + 'a1b2c3_d-'.repeat(9) + 'A'.repeat(8);
+    const result = redactSecrets(`Token: ${token}`);
+    expect(result).toBe('Token: [REDACTED]');
+    // Verify no partial leak — nothing after [REDACTED]
+    expect(result).not.toMatch(/\[REDACTED\].+/);
+  });
+
+  it('redacts Discord bot tokens', () => {
+    const token = 'A'.repeat(24) + '.' + 'B'.repeat(6) + '.' + 'C'.repeat(27);
+    expect(redactSecrets(`Discord: ${token}`)).toBe('Discord: [REDACTED]');
+  });
+
+  it('redacts AWS access key IDs', () => {
+    const key = 'AKIA' + 'A'.repeat(16);
+    expect(redactSecrets(`AWS: ${key}`)).toBe('AWS: [REDACTED]');
   });
 });

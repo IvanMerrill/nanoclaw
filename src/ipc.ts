@@ -20,6 +20,57 @@ import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
+/** Maximum IPC file size in bytes. Files larger than this are rejected and deleted. */
+const MAX_IPC_FILE_SIZE = 1_000_000; // 1 MB
+
+/** Cap concurrent spawn_agent sub-containers to prevent runaway spawning. */
+let activeSpawnAgents = 0;
+const MAX_SPAWN_AGENTS = 3;
+
+/** Check file size and reject oversized IPC files. Returns true if file is too large. */
+function isOversizedIpcFile(filePath: string, sourceGroup: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > MAX_IPC_FILE_SIZE) {
+      logger.warn(
+        { filePath, size: stat.size, sourceGroup, maxSize: MAX_IPC_FILE_SIZE },
+        'Oversized IPC file rejected and deleted',
+      );
+      fs.unlinkSync(filePath);
+      return true;
+    }
+  } catch {
+    // File may have been deleted between readdir and stat — skip it
+    return true;
+  }
+  return false;
+}
+
+/** Per-group message rate limiter: max messages per window. */
+const MESSAGE_RATE_LIMIT = 20;
+const MESSAGE_RATE_WINDOW_MS = 60_000; // 1 minute
+
+const messageRateBuckets = new Map<string, { count: number; windowStart: number }>();
+
+/** Returns true if the message should be rate-limited (rejected). */
+function isRateLimited(sourceGroup: string): boolean {
+  const now = Date.now();
+  const bucket = messageRateBuckets.get(sourceGroup);
+  if (!bucket || now - bucket.windowStart > MESSAGE_RATE_WINDOW_MS) {
+    messageRateBuckets.set(sourceGroup, { count: 1, windowStart: now });
+    return false;
+  }
+  bucket.count++;
+  if (bucket.count > MESSAGE_RATE_LIMIT) {
+    logger.warn(
+      { sourceGroup, count: bucket.count, limit: MESSAGE_RATE_LIMIT },
+      'Outbound message rate limit exceeded — message dropped',
+    );
+    return true;
+  }
+  return false;
+}
+
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -82,6 +133,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             .filter((f) => f.endsWith('.json'));
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
+            if (isOversizedIpcFile(filePath, sourceGroup)) continue;
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (data.type === 'message' && data.chatJid && data.text) {
@@ -91,6 +143,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
+                  if (isRateLimited(sourceGroup)) {
+                    fs.unlinkSync(filePath);
+                    continue;
+                  }
                   await deps.sendMessage(data.chatJid, data.text);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
@@ -130,9 +186,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(tasksDir)) {
           const taskFiles = fs
             .readdirSync(tasksDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter(
+              (f) => f.endsWith('.json') && !f.startsWith('spawn_result_'),
+            );
           for (const file of taskFiles) {
             const filePath = path.join(tasksDir, file);
+            if (isOversizedIpcFile(filePath, sourceGroup)) continue;
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               // Pass source group identity to processTaskIpc for authorization
@@ -468,56 +527,93 @@ export async function processTaskIpc(
       }
 
       const spawnDesc = data.description || 'sub-agent';
-      logger.info(
-        { requestId: data.requestId, sourceGroup, description: spawnDesc },
-        'Spawning sub-agent',
-      );
 
-      // Collect all output from the sub-agent
-      let spawnOutput = '';
-      try {
-        await runContainerAgent(
-          spawnGroup,
-          {
-            prompt: data.prompt,
-            groupFolder: sourceGroup,
-            chatJid: data.chatJid || '',
-            isMain: true,
-            isScheduledTask: true,
-            assistantName: ASSISTANT_NAME,
-            allowedTools: data.allowed_tools,
-          },
-          () => {}, // onProcess — not tracking spawned containers in the queue
-          async (streamedOutput: ContainerOutput) => {
-            if (streamedOutput.result) {
-              spawnOutput += streamedOutput.result;
-            }
-          },
-        );
-      } catch (err) {
-        spawnOutput = `Error: ${err instanceof Error ? err.message : String(err)}`;
-        logger.error(
-          { requestId: data.requestId, err },
-          'spawn_agent sub-agent failed',
-        );
-      }
-
-      // Write result file to the spawning agent's IPC directory
+      // Write result file eagerly on first output so the parent agent
+      // doesn't have to wait for the sub-agent container to exit (idle timeout).
       const resultDir = path.join(resolveGroupIpcPath(sourceGroup), 'tasks');
       fs.mkdirSync(resultDir, { recursive: true });
       const resultPath = path.join(
         resultDir,
         `spawn_result_${data.requestId}.json`,
       );
-      fs.writeFileSync(resultPath, JSON.stringify({ output: spawnOutput }));
+
+      // Enforce sub-agent concurrency limit
+      if (activeSpawnAgents >= MAX_SPAWN_AGENTS) {
+        logger.warn(
+          { requestId: data.requestId, activeSpawnAgents },
+          'spawn_agent rejected: too many concurrent sub-agents',
+        );
+        fs.writeFileSync(
+          resultPath,
+          JSON.stringify({
+            output: 'Error: Too many concurrent sub-agents. Try again later.',
+          }),
+        );
+        break;
+      }
+      activeSpawnAgents++;
 
       logger.info(
-        {
-          requestId: data.requestId,
-          outputLength: spawnOutput.length,
-        },
-        'spawn_agent result written',
+        { requestId: data.requestId, sourceGroup, description: spawnDesc, activeSpawnAgents },
+        'Spawning sub-agent',
       );
+
+      let spawnOutput = '';
+      let resultWritten = false;
+
+      // Fire-and-forget: don't await — let the container run and exit on its own.
+      // The result file is written as soon as the sub-agent produces output.
+      runContainerAgent(
+        spawnGroup,
+        {
+          prompt: data.prompt,
+          groupFolder: sourceGroup,
+          chatJid: data.chatJid || '',
+          isMain: false,
+          isScheduledTask: true,
+          assistantName: ASSISTANT_NAME,
+          allowedTools: data.allowed_tools,
+        },
+        () => {}, // onProcess — not tracking spawned containers in the queue
+        async (streamedOutput: ContainerOutput) => {
+          if (streamedOutput.result) {
+            spawnOutput += streamedOutput.result;
+          }
+          // Write result file on first output callback (even if result is null,
+          // it signals the sub-agent has finished its work)
+          if (!resultWritten) {
+            resultWritten = true;
+            fs.writeFileSync(
+              resultPath,
+              JSON.stringify({ output: spawnOutput }),
+            );
+            logger.info(
+              {
+                requestId: data.requestId,
+                outputLength: spawnOutput.length,
+              },
+              'spawn_agent result written',
+            );
+          }
+        },
+      ).then(() => {
+        activeSpawnAgents--;
+      }).catch((err) => {
+        activeSpawnAgents--;
+        // Write error result if the container fails and we haven't written yet
+        if (!resultWritten) {
+          resultWritten = true;
+          const errorOutput = `Error: ${err instanceof Error ? err.message : String(err)}`;
+          fs.writeFileSync(
+            resultPath,
+            JSON.stringify({ output: errorOutput }),
+          );
+          logger.error(
+            { requestId: data.requestId, err },
+            'spawn_agent sub-agent failed',
+          );
+        }
+      });
 
       // Don't unlink the request file — the outer loop does that
       break;

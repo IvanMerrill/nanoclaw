@@ -168,6 +168,88 @@ describe('credential-proxy', () => {
     expect(lastUpstreamHeaders['transfer-encoding']).toBeUndefined();
   });
 
+  it('blocks requests to non-allowed paths', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'GET',
+        path: '/v1/organizations',
+        headers: { 'x-api-key': 'placeholder' },
+      },
+    );
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toBe('Forbidden');
+  });
+
+  it('allows requests to /v1/messages', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('allows requests to OAuth key exchange path', async () => {
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+    });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/api/oauth/claude_cli/create_api_key',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('does not forward non-allowlisted headers to upstream', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+          'x-forwarded-for': '10.0.0.1',
+          'x-real-ip': '10.0.0.1',
+          'x-custom-header': 'should-be-stripped',
+        },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['x-forwarded-for']).toBeUndefined();
+    expect(lastUpstreamHeaders['x-real-ip']).toBeUndefined();
+    expect(lastUpstreamHeaders['x-custom-header']).toBeUndefined();
+    // Allowlisted headers should be forwarded
+    expect(lastUpstreamHeaders['content-type']).toBe('application/json');
+  });
+
   it('returns 502 when upstream is unreachable', async () => {
     Object.assign(mockEnv, {
       ANTHROPIC_API_KEY: 'sk-ant-real-key',

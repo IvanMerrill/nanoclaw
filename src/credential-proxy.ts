@@ -28,6 +28,21 @@ const upstreamProxyAgent = envProxyUrl
   ? new HttpsProxyAgent(envProxyUrl)
   : undefined;
 
+/**
+ * Only forward requests to known Anthropic API paths.
+ * Any request to an unlisted path gets 403 Forbidden.
+ */
+const ALLOWED_PATHS = [
+  '/v1/messages',
+  '/api/oauth/claude_cli/create_api_key',
+];
+
+function isAllowedPath(requestUrl: string | undefined): boolean {
+  if (!requestUrl) return false;
+  const pathOnly = requestUrl.split('?')[0];
+  return ALLOWED_PATHS.includes(pathOnly);
+}
+
 export type AuthMode = 'api-key' | 'oauth';
 
 export interface ProxyConfig {
@@ -61,17 +76,37 @@ export function startCredentialProxy(
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks);
+
+        // Path allowlist: only forward requests to known API endpoints
+        if (!isAllowedPath(req.url)) {
+          logger.warn(
+            { url: req.url },
+            'Credential proxy blocked request to non-allowed path',
+          );
+          res.writeHead(403, { 'content-type': 'text/plain' });
+          res.end('Forbidden');
+          return;
+        }
+
+        // Header allowlist: only forward known safe headers to upstream
+        const FORWARDED_HEADERS = [
+          'content-type',
+          'accept',
+          'anthropic-version',
+          'anthropic-beta',
+          'x-api-key',
+          'authorization',
+        ];
         const headers: Record<string, string | number | string[] | undefined> =
           {
-            ...(req.headers as Record<string, string>),
             host: upstreamUrl.host,
             'content-length': body.length,
           };
-
-        // Strip hop-by-hop headers that must not be forwarded by proxies
-        delete headers['connection'];
-        delete headers['keep-alive'];
-        delete headers['transfer-encoding'];
+        for (const name of FORWARDED_HEADERS) {
+          if (req.headers[name]) {
+            headers[name] = req.headers[name] as string;
+          }
+        }
 
         if (authMode === 'api-key') {
           // API key mode: inject x-api-key on every request

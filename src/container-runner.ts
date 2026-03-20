@@ -28,6 +28,7 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { redactSecrets } from './redact.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -423,6 +424,7 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
+    container.stdin.on('error', () => {}); // Prevent EPIPE crash if container exits early
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
 
@@ -653,7 +655,7 @@ export async function runContainerAgent(
         );
       }
 
-      fs.writeFileSync(logFile, logLines.join('\n'));
+      fs.writeFileSync(logFile, redactSecrets(logLines.join('\n')));
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {

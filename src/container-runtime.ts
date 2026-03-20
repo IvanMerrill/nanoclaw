@@ -62,6 +62,9 @@ export function readonlyMountArgs(
 
 /** Returns the shell command to stop a container by name. */
 export function stopContainer(name: string): string {
+  if (!/^nanoclaw-[a-zA-Z0-9-]+$/.test(name)) {
+    throw new Error(`Invalid container name: ${name}`);
+  }
   return `${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`;
 }
 

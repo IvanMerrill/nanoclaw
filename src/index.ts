@@ -463,7 +463,7 @@ async function startMessageLoop(): Promise<void> {
             if (
               isSessionCommandAllowed(
                 isMainGroup,
-                loopCmdMsg.is_from_me === true,
+                !!loopCmdMsg.is_from_me,
               )
             ) {
               queue.closeStdin(chatJid);
