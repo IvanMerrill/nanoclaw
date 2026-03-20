@@ -3,7 +3,12 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { ASSISTANT_NAME, DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import {
   AvailableGroup,
   ContainerOutput,
@@ -498,19 +503,13 @@ export async function processTaskIpc(
       }
 
       // Write result file to the spawning agent's IPC directory
-      const resultDir = path.join(
-        resolveGroupIpcPath(sourceGroup),
-        'tasks',
-      );
+      const resultDir = path.join(resolveGroupIpcPath(sourceGroup), 'tasks');
       fs.mkdirSync(resultDir, { recursive: true });
       const resultPath = path.join(
         resultDir,
         `spawn_result_${data.requestId}.json`,
       );
-      fs.writeFileSync(
-        resultPath,
-        JSON.stringify({ output: spawnOutput }),
-      );
+      fs.writeFileSync(resultPath, JSON.stringify({ output: spawnOutput }));
 
       logger.info(
         {
