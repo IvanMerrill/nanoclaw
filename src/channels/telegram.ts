@@ -231,6 +231,18 @@ export class TelegramChannel implements Channel {
 
       // Pick the highest resolution photo (last element in the array)
       const photos = ctx.message.photo;
+      if (!photos || photos.length === 0) {
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: `[Photo]${caption}`,
+          timestamp,
+          is_from_me: false,
+        });
+        return;
+      }
       const photo = photos[photos.length - 1];
 
       let content: string;

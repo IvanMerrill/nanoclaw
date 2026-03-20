@@ -60,6 +60,7 @@ import {
 import { extractSessionCommand, handleSessionCommand, isSessionCommandAllowed } from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { scheduleAck } from './ack.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -242,9 +243,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  // Schedule a lightweight ack if the agent takes more than 10s to respond
+  const lastMessage = missedMessages[missedMessages.length - 1];
+  const cancelAck = scheduleAck(lastMessage.content, async (text) => {
+    await channel.sendMessage(chatJid, text);
+    logger.debug({ group: group.name }, `Ack sent: ${text}`);
+  });
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
+      cancelAck();
       const raw =
         typeof result.result === 'string'
           ? result.result
@@ -269,6 +278,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
+  cancelAck();
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
