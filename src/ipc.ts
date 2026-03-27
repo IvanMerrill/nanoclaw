@@ -626,10 +626,15 @@ export async function processTaskIpc(
       );
 
       // Notify the user that a sub-agent is being spun up
-      const spawnChatJid = data.chatJid || Object.entries(registeredGroups)
-        .find(([, g]) => g.folder === sourceGroup)?.[0];
+      const spawnChatJid =
+        data.chatJid ||
+        Object.entries(registeredGroups).find(
+          ([, g]) => g.folder === sourceGroup,
+        )?.[0];
       if (spawnChatJid) {
-        deps.sendMessage(spawnChatJid, `🔄 Spinning up sub-agent: ${spawnDesc}`).catch(() => {});
+        deps
+          .sendMessage(spawnChatJid, `🔄 Spinning up sub-agent: ${spawnDesc}`)
+          .catch(() => {});
       }
 
       let spawnOutput = '';
@@ -680,8 +685,10 @@ export async function processTaskIpc(
               setTimeout(() => {
                 try {
                   execSync(stopContainer(name), { stdio: 'pipe' });
-                  logger.info({ requestId: data.requestId, containerName: name },
-                    'Sub-agent container stopped after result');
+                  logger.info(
+                    { requestId: data.requestId, containerName: name },
+                    'Sub-agent container stopped after result',
+                  );
                 } catch {
                   // Already exited — fine
                 }

@@ -71,7 +71,7 @@ import { logger } from './logger.js';
 
 function createDeps(): IpcDeps {
   return {
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
     registeredGroups: () => ({
       'chat@g.us': {
         name: 'Main',
