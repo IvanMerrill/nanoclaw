@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,6 +15,7 @@ import {
   ContainerOutput,
   runContainerAgent,
 } from './container-runner.js';
+import { stopContainer } from './container-runtime.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -530,14 +532,39 @@ export async function processTaskIpc(
         logger.warn({ data }, 'Invalid spawn_agent request — missing fields');
         break;
       }
-      // Block send_email in spawn_agent — only interactive messages may send email
-      if (data.allowed_tools.includes('mcp__google__send_email')) {
-        logger.warn(
-          { data },
-          'spawn_agent cannot include send_email — removed',
+      // Block outbound communication tools in spawn_agent — sub-agent output
+      // must flow back through the parent agent, not directly to users.
+      const blockedSpawnTools = [
+        'mcp__google__send_email',
+        'mcp__nanoclaw__send_message',
+      ];
+      const removedTools = data.allowed_tools.filter((t: string) =>
+        blockedSpawnTools.includes(t),
+      );
+      if (removedTools.length > 0) {
+        logger.info(
+          { removedTools },
+          'spawn_agent: stripped direct messaging tools — output must flow through parent',
         );
         data.allowed_tools = data.allowed_tools.filter(
-          (t: string) => t !== 'mcp__google__send_email',
+          (t: string) => !blockedSpawnTools.includes(t),
+        );
+      }
+      // Also strip wildcard nanoclaw access and replace with safe subset
+      if (data.allowed_tools.includes('mcp__nanoclaw__*')) {
+        data.allowed_tools = data.allowed_tools.filter(
+          (t: string) => t !== 'mcp__nanoclaw__*',
+        );
+        // Re-add only safe nanoclaw tools (task management, group queries)
+        data.allowed_tools.push(
+          'mcp__nanoclaw__spawn_agent',
+          'mcp__nanoclaw__schedule_task',
+          'mcp__nanoclaw__list_tasks',
+          'mcp__nanoclaw__update_task',
+          'mcp__nanoclaw__delete_task',
+          'mcp__nanoclaw__list_groups',
+          'mcp__nanoclaw__register_group',
+          'mcp__nanoclaw__refresh_groups',
         );
       }
       // Only main group can spawn sub-agents
@@ -598,8 +625,16 @@ export async function processTaskIpc(
         'Spawning sub-agent',
       );
 
+      // Notify the user that a sub-agent is being spun up
+      const spawnChatJid = data.chatJid || Object.entries(registeredGroups)
+        .find(([, g]) => g.folder === sourceGroup)?.[0];
+      if (spawnChatJid) {
+        deps.sendMessage(spawnChatJid, `🔄 Spinning up sub-agent: ${spawnDesc}`).catch(() => {});
+      }
+
       let spawnOutput = '';
       let resultWritten = false;
+      let spawnContainerName: string | null = null;
 
       // Fire-and-forget: don't await — let the container run and exit on its own.
       // The result file is written as soon as the sub-agent produces output.
@@ -614,7 +649,9 @@ export async function processTaskIpc(
           assistantName: ASSISTANT_NAME,
           allowedTools: data.allowed_tools,
         },
-        () => {}, // onProcess — not tracking spawned containers in the queue
+        (_proc, containerName) => {
+          spawnContainerName = containerName;
+        },
         async (streamedOutput: ContainerOutput) => {
           if (streamedOutput.result) {
             spawnOutput += streamedOutput.result;
@@ -634,6 +671,22 @@ export async function processTaskIpc(
               },
               'spawn_agent result written',
             );
+
+            // Kill the sub-agent container shortly after result is captured.
+            // Sub-agents are single-turn; without this they linger and can
+            // steal IPC messages from the main container.
+            if (spawnContainerName) {
+              const name = spawnContainerName;
+              setTimeout(() => {
+                try {
+                  execSync(stopContainer(name), { stdio: 'pipe' });
+                  logger.info({ requestId: data.requestId, containerName: name },
+                    'Sub-agent container stopped after result');
+                } catch {
+                  // Already exited — fine
+                }
+              }, 5000);
+            }
           }
         },
       )

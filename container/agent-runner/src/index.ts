@@ -386,9 +386,17 @@ async function runQuery(
   const stream = new MessageStream();
   stream.push(prompt);
 
-  // Poll IPC for follow-up messages and _close sentinel during the query
-  let ipcPolling = true;
+  // Poll IPC for follow-up messages and _close sentinel during the query.
+  // Scheduled tasks and sub-agents are single-turn: they share the IPC input
+  // directory with the main container, so polling would steal messages.
+  // End the stream immediately so the SDK treats it as single-turn.
+  let ipcPolling = !containerInput.isScheduledTask;
   let closedDuringQuery = false;
+
+  if (containerInput.isScheduledTask) {
+    stream.end();
+  }
+
   const pollIpcDuringQuery = () => {
     if (!ipcPolling) return;
     if (shouldClose()) {
@@ -696,6 +704,14 @@ async function main(): Promise<void> {
 
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+
+      // Scheduled tasks and sub-agents are single-turn: exit after first query.
+      // Staying in the loop would make them poll the shared IPC input directory,
+      // stealing messages meant for the main container.
+      if (containerInput.isScheduledTask) {
+        log('Scheduled task / sub-agent completed, exiting');
+        break;
+      }
 
       log('Query ended, waiting for next IPC message...');
 
