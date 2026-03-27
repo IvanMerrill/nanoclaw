@@ -6,6 +6,7 @@ import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { sanitizeFilename, extractText, formatFileMessage } from '../file-extract.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -285,9 +286,84 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
-      storeNonText(ctx, `[Document: ${name}]`);
+    this.bot.on('message:document', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
+
+      const document = ctx.message.document;
+      if (!document) {
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: `[Document]${caption}`,
+          timestamp,
+          is_from_me: false,
+        });
+        return;
+      }
+
+      const rawName = document.file_name || 'file';
+      let content: string;
+
+      try {
+        const file = await ctx.api.getFile(document.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+
+        const groupDir = resolveGroupFolderPath(group.folder);
+        const filesDir = path.join(groupDir, 'files');
+        fs.mkdirSync(filesDir, { recursive: true });
+
+        const safeName = sanitizeFilename(rawName);
+        const filename = `tg_${ctx.message.message_id}_${safeName}`;
+        const hostPath = path.join(filesDir, filename);
+        const containerPath = `/workspace/group/files/${filename}`;
+
+        // Download the file
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        fs.writeFileSync(hostPath, buffer);
+
+        // Extract text
+        const extracted = await extractText(hostPath);
+        content = formatFileMessage(containerPath, extracted, caption);
+
+        logger.info({ chatJid, file: filename }, 'Telegram file saved');
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to download Telegram file');
+        content = `[Document: ${rawName}]${caption}`;
+      }
+
+      this.opts.onMessage(chatJid, {
+        id: ctx.message.message_id.toString(),
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: false,
+      });
     });
     this.bot.on('message:sticker', (ctx) => {
       const emoji = ctx.message.sticker?.emoji || '';

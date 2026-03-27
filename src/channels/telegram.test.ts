@@ -24,6 +24,34 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
+// Mock file-extract
+vi.mock('../file-extract.js', () => ({
+  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9._-]/g, '_')),
+  extractText: vi.fn().mockResolvedValue(null),
+  formatFileMessage: vi.fn((containerPath: string, text: string | null, caption: string) => {
+    if (text) return `[File: ${containerPath}]\n--- file contents ---\n${text}\n--- end file contents ---${caption}`;
+    return `[File: ${containerPath}]${caption}`;
+  }),
+}));
+
+// Mock group-folder
+vi.mock('../group-folder.js', () => ({
+  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/groups/${folder}`),
+}));
+
+// Mock fs (mkdirSync and writeFileSync to avoid real filesystem writes)
+vi.mock('fs', async () => {
+  const actual = await vi.importActual('fs');
+  return {
+    ...actual,
+    default: {
+      ...(actual as any).default,
+      mkdirSync: vi.fn(),
+      writeFileSync: vi.fn(),
+    },
+  };
+});
+
 // --- Grammy mock ---
 
 type Handler = (...args: any[]) => any;
@@ -156,6 +184,12 @@ function createMediaCtx(overrides: {
       ...(overrides.extra || {}),
     },
     me: { username: 'andy_ai_bot' },
+    api: {
+      getFile: vi.fn().mockResolvedValue({
+        file_id: 'test-file-id',
+        file_path: 'documents/test.pdf',
+      }),
+    },
   };
 }
 
@@ -181,6 +215,10 @@ async function triggerMediaMessage(
 describe('TelegramChannel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+    }) as any;
   });
 
   afterEach(() => {
@@ -624,33 +662,65 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores document with filename', async () => {
+    it('downloads document and passes file content to message', async () => {
+      const { extractText } = await import('../file-extract.js');
+      vi.mocked(extractText).mockResolvedValueOnce('extracted pdf text');
+
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
       const ctx = createMediaCtx({
-        extra: { document: { file_name: 'report.pdf' } },
+        messageId: 42,
+        extra: { document: { file_id: 'abc123', file_name: 'report.pdf' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(ctx.api.getFile).toHaveBeenCalledWith('abc123');
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: expect.stringContaining('[File:'),
+        }),
+      );
+    });
+
+    it('downloads document with fallback name when filename missing', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({
+        messageId: 43,
+        extra: { document: { file_id: 'def456' } },
       });
       await triggerMediaMessage('message:document', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Document: report.pdf]' }),
+        expect.objectContaining({
+          content: expect.stringContaining('[File:'),
+        }),
       );
     });
 
-    it('stores document with fallback name when filename missing', async () => {
+    it('falls back to placeholder on document download failure', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      const ctx = createMediaCtx({ extra: { document: {} } });
+      const ctx = createMediaCtx({
+        extra: { document: { file_id: 'fail', file_name: 'report.pdf' } },
+      });
+      ctx.api.getFile.mockRejectedValueOnce(new Error('network error'));
+
       await triggerMediaMessage('message:document', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Document: file]' }),
+        expect.objectContaining({
+          content: '[Document: report.pdf]',
+        }),
       );
     });
 
