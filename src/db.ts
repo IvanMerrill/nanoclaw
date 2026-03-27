@@ -271,9 +271,10 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   const MAX_MESSAGE_SIZE = 10_000;
-  const content = msg.content.length > MAX_MESSAGE_SIZE
-    ? msg.content.slice(0, MAX_MESSAGE_SIZE) + '\n[Message truncated]'
-    : msg.content;
+  const content =
+    msg.content.length > MAX_MESSAGE_SIZE
+      ? msg.content.slice(0, MAX_MESSAGE_SIZE) + '\n[Message truncated]'
+      : msg.content;
 
   db.prepare(
     `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

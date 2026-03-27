@@ -47,6 +47,34 @@ describe('stopContainer', () => {
       `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-test-123`,
     );
   });
+
+  it('throws on name without nanoclaw- prefix', () => {
+    expect(() => stopContainer('evil-container')).toThrow(
+      'Invalid container name',
+    );
+  });
+
+  it('throws on name with shell metacharacters', () => {
+    expect(() => stopContainer('nanoclaw-test; rm -rf /')).toThrow(
+      'Invalid container name',
+    );
+  });
+
+  it('throws on name with spaces', () => {
+    expect(() => stopContainer('nanoclaw-test foo')).toThrow(
+      'Invalid container name',
+    );
+  });
+
+  it('throws on empty string', () => {
+    expect(() => stopContainer('')).toThrow('Invalid container name');
+  });
+
+  it('accepts valid name with hyphens and numbers', () => {
+    expect(stopContainer('nanoclaw-main-abc-123')).toBe(
+      `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-main-abc-123`,
+    );
+  });
 });
 
 // --- ensureContainerRuntimeRunning ---

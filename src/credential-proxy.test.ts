@@ -171,14 +171,11 @@ describe('credential-proxy', () => {
   it('blocks requests to non-allowed paths', async () => {
     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
 
-    const res = await makeRequest(
-      proxyPort,
-      {
-        method: 'GET',
-        path: '/v1/organizations',
-        headers: { 'x-api-key': 'placeholder' },
-      },
-    );
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/v1/organizations',
+      headers: { 'x-api-key': 'placeholder' },
+    });
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toBe('Forbidden');
@@ -248,6 +245,59 @@ describe('credential-proxy', () => {
     expect(lastUpstreamHeaders['x-custom-header']).toBeUndefined();
     // Allowlisted headers should be forwarded
     expect(lastUpstreamHeaders['content-type']).toBe('application/json');
+  });
+
+  it('allows /v1/messages with query parameters', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/v1/messages?beta=true',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('blocks non-allowed path with allowed-looking query param', async () => {
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: '/v1/evil?path=/v1/messages',
+      headers: { 'x-api-key': 'placeholder' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toBe('Forbidden');
+  });
+
+  it('allows OAuth path with query string', async () => {
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+    });
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/api/oauth/claude_cli/create_api_key?foo=bar',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer placeholder',
+        },
+      },
+      '{}',
+    );
+
+    expect(res.statusCode).toBe(200);
   });
 
   it('returns 502 when upstream is unreachable', async () => {

@@ -50,7 +50,10 @@ function isOversizedIpcFile(filePath: string, sourceGroup: string): boolean {
 const MESSAGE_RATE_LIMIT = 20;
 const MESSAGE_RATE_WINDOW_MS = 60_000; // 1 minute
 
-const messageRateBuckets = new Map<string, { count: number; windowStart: number }>();
+const messageRateBuckets = new Map<
+  string,
+  { count: number; windowStart: number }
+>();
 
 /** Returns true if the message should be rate-limited (rejected). */
 function isRateLimited(sourceGroup: string): boolean {
@@ -322,6 +325,12 @@ export async function processTaskIpc(
           nextRun = date.toISOString();
         }
 
+        // Block send_email in scheduled tasks — only interactive messages may send email
+        if (data.allowed_tools?.includes('mcp__google__send_email')) {
+          logger.warn({ data }, 'schedule_task cannot include send_email — removed');
+          data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+        }
+
         const taskId =
           data.taskId ||
           `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -436,8 +445,14 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
-        if (data.allowed_tools !== undefined)
+        if (data.allowed_tools !== undefined) {
+          // Block send_email in task updates — only interactive messages may send email
+          if (data.allowed_tools.includes('mcp__google__send_email')) {
+            logger.warn({ data }, 'update_task cannot include send_email — removed');
+            data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+          }
           updates.allowed_tools = JSON.stringify(data.allowed_tools);
+        }
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {
@@ -505,6 +520,11 @@ export async function processTaskIpc(
         logger.warn({ data }, 'Invalid spawn_agent request — missing fields');
         break;
       }
+      // Block send_email in spawn_agent — only interactive messages may send email
+      if (data.allowed_tools.includes('mcp__google__send_email')) {
+        logger.warn({ data }, 'spawn_agent cannot include send_email — removed');
+        data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+      }
       // Only main group can spawn sub-agents
       if (!isMain) {
         logger.warn(
@@ -554,7 +574,12 @@ export async function processTaskIpc(
       activeSpawnAgents++;
 
       logger.info(
-        { requestId: data.requestId, sourceGroup, description: spawnDesc, activeSpawnAgents },
+        {
+          requestId: data.requestId,
+          sourceGroup,
+          description: spawnDesc,
+          activeSpawnAgents,
+        },
         'Spawning sub-agent',
       );
 
@@ -596,24 +621,26 @@ export async function processTaskIpc(
             );
           }
         },
-      ).then(() => {
-        activeSpawnAgents--;
-      }).catch((err) => {
-        activeSpawnAgents--;
-        // Write error result if the container fails and we haven't written yet
-        if (!resultWritten) {
-          resultWritten = true;
-          const errorOutput = `Error: ${err instanceof Error ? err.message : String(err)}`;
-          fs.writeFileSync(
-            resultPath,
-            JSON.stringify({ output: errorOutput }),
-          );
-          logger.error(
-            { requestId: data.requestId, err },
-            'spawn_agent sub-agent failed',
-          );
-        }
-      });
+      )
+        .then(() => {
+          activeSpawnAgents--;
+        })
+        .catch((err) => {
+          activeSpawnAgents--;
+          // Write error result if the container fails and we haven't written yet
+          if (!resultWritten) {
+            resultWritten = true;
+            const errorOutput = `Error: ${err instanceof Error ? err.message : String(err)}`;
+            fs.writeFileSync(
+              resultPath,
+              JSON.stringify({ output: errorOutput }),
+            );
+            logger.error(
+              { requestId: data.requestId, err },
+              'spawn_agent sub-agent failed',
+            );
+          }
+        });
 
       // Don't unlink the request file — the outer loop does that
       break;
@@ -656,4 +683,15 @@ export async function processTaskIpc(
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
+}
+
+/** @internal — test-only exports */
+export {
+  isOversizedIpcFile as _isOversizedIpcFile,
+  isRateLimited as _isRateLimited,
+};
+
+/** @internal — reset rate-limit state between tests */
+export function _resetRateLimits(): void {
+  messageRateBuckets.clear();
 }

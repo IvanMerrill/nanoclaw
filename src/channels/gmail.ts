@@ -134,21 +134,33 @@ export class GmailChannel implements Channel {
       // Try to recover metadata by fetching the thread from Gmail
       try {
         const thread = await this.gmail.users.threads.get({
-          userId: 'me', id: threadId, format: 'metadata',
+          userId: 'me',
+          id: threadId,
+          format: 'metadata',
           metadataHeaders: ['From', 'Subject', 'Message-ID'],
         });
         const lastMsg = thread.data.messages?.[thread.data.messages.length - 1];
         if (lastMsg) {
           const headers = lastMsg.payload?.headers || [];
-          const from = headers.find(h => h.name === 'From')?.value || '';
-          const subject = headers.find(h => h.name === 'Subject')?.value || '';
-          const msgId = headers.find(h => h.name === 'Message-ID')?.value || '';
-          meta = { sender: from, senderName: from.split('<')[0].trim(), subject, messageId: msgId };
+          const from = headers.find((h) => h.name === 'From')?.value || '';
+          const subject =
+            headers.find((h) => h.name === 'Subject')?.value || '';
+          const msgId =
+            headers.find((h) => h.name === 'Message-ID')?.value || '';
+          meta = {
+            sender: from,
+            senderName: from.split('<')[0].trim(),
+            subject,
+            messageId: msgId,
+          };
           this.threadMeta.set(threadId, meta);
           logger.info({ threadId }, 'Recovered thread metadata from Gmail API');
         }
       } catch (err) {
-        logger.warn({ jid, err }, 'Failed to recover thread metadata from Gmail');
+        logger.warn(
+          { jid, err },
+          'Failed to recover thread metadata from Gmail',
+        );
       }
     }
 
@@ -294,7 +306,9 @@ export class GmailChannel implements Channel {
     const MAX_EMAIL_BODY = 8000;
     let body = this.extractTextBody(msg.data.payload);
     if (body.length > MAX_EMAIL_BODY) {
-      body = body.slice(0, MAX_EMAIL_BODY) + '\n\n[Email body truncated. Use Gmail MCP tools to read the full message.]';
+      body =
+        body.slice(0, MAX_EMAIL_BODY) +
+        '\n\n[Email body truncated. Use Gmail MCP tools to read the full message.]';
     }
 
     if (!body) {

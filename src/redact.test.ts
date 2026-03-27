@@ -36,9 +36,9 @@ describe('redactSecrets', () => {
 
   it('redacts Telegram bot tokens in API URLs', () => {
     const token = 'bot123456789:' + 'A'.repeat(35);
-    expect(redactSecrets(`URL: https://api.telegram.org/file/${token}/photo.jpg`)).toBe(
-      'URL: https://api.telegram.org/file/[REDACTED]/photo.jpg',
-    );
+    expect(
+      redactSecrets(`URL: https://api.telegram.org/file/${token}/photo.jpg`),
+    ).toBe('URL: https://api.telegram.org/file/[REDACTED]/photo.jpg');
   });
 
   it('passes through clean text unchanged', () => {

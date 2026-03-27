@@ -298,6 +298,78 @@ describe('getNewMessages', () => {
   });
 });
 
+// --- storeMessage truncation ---
+
+describe('storeMessage truncation', () => {
+  beforeEach(() => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+  });
+
+  it('truncates content longer than 10,000 chars', () => {
+    const longContent = 'a'.repeat(15_000);
+    store({
+      id: 'trunc-1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: longContent,
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+
+    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content.length).toBe(10_000 + '\n[Message truncated]'.length);
+    expect(msgs[0].content.endsWith('\n[Message truncated]')).toBe(true);
+  });
+
+  it('does not truncate at exactly 10,000 chars', () => {
+    const exactContent = 'b'.repeat(10_000);
+    store({
+      id: 'trunc-2',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: exactContent,
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+
+    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe(exactContent);
+  });
+
+  it('truncates at 10,001 chars', () => {
+    const boundaryContent = 'c'.repeat(10_001);
+    store({
+      id: 'trunc-3',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: boundaryContent,
+      timestamp: '2024-01-01T00:00:03.000Z',
+    });
+
+    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content.length).toBe(10_000 + '\n[Message truncated]'.length);
+  });
+
+  it('appends [Message truncated] marker', () => {
+    store({
+      id: 'trunc-4',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'd'.repeat(20_000),
+      timestamp: '2024-01-01T00:00:04.000Z',
+    });
+
+    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    expect(msgs[0].content).toContain('[Message truncated]');
+    expect(msgs[0].content.startsWith('d'.repeat(10_000))).toBe(true);
+  });
+});
+
 // --- storeChatMetadata ---
 
 describe('storeChatMetadata', () => {

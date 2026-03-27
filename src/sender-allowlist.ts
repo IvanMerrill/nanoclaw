@@ -38,7 +38,11 @@ export function loadSenderAllowlist(
   pathOverride?: string,
 ): SenderAllowlistConfig {
   // pathOverride bypasses cache (used in tests)
-  if (!pathOverride && cachedConfig && Date.now() - cacheLoadedAt < CACHE_TTL_MS) {
+  if (
+    !pathOverride &&
+    cachedConfig &&
+    Date.now() - cacheLoadedAt < CACHE_TTL_MS
+  ) {
     return cachedConfig;
   }
 

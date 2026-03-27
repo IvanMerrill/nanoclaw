@@ -775,6 +775,57 @@ describe('TelegramChannel', () => {
       expect(currentBot().api.sendMessage).toHaveBeenCalledTimes(1);
     });
 
+    it('splits long message at last newline before 4096 limit', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      // Build a message with lines — place a newline near the 4096 boundary
+      const line1 = 'a'.repeat(4000) + '\n';
+      const line2 = 'b'.repeat(200);
+      const text = line1 + line2; // 4201 chars total
+
+      await channel.sendMessage('tg:100200300', text);
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledTimes(2);
+      // First chunk should split at the newline (including the newline = 4001 chars)
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        '100200300',
+        line1,
+        { parse_mode: 'Markdown' },
+      );
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        '100200300',
+        line2,
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    it('falls back to hard split when no newline exists', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const text = 'z'.repeat(5000); // no newlines at all
+      await channel.sendMessage('tg:100200300', text);
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        1,
+        '100200300',
+        'z'.repeat(4096),
+        { parse_mode: 'Markdown' },
+      );
+      expect(currentBot().api.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        '100200300',
+        'z'.repeat(904),
+        { parse_mode: 'Markdown' },
+      );
+    });
+
     it('handles send failure gracefully', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);

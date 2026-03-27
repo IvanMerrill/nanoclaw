@@ -10,6 +10,7 @@ import {
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { startGoogleTokenVendor } from './google-token-vendor.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -187,7 +188,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) =>
-        runAgent(group, prompt, chatJid, onOutput),
+        runAgent(group, prompt, chatJid, onOutput, ['mcp__google__send_email']),
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (ts) => {
         lastAgentTimestamp[chatJid] = ts;
@@ -292,7 +293,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, ['mcp__google__send_email']);
 
   cancelAck();
   await channel.setTyping?.(chatJid, false);
@@ -326,6 +327,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  additionalAllowedTools?: string[],
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -376,6 +378,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        additionalAllowedTools,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -460,12 +463,7 @@ async function startMessageLoop(): Promise<void> {
             // Only close active container if the sender is authorized — otherwise an
             // untrusted user could kill in-flight work by sending /compact (DoS).
             // closeStdin no-ops internally when no container is active.
-            if (
-              isSessionCommandAllowed(
-                isMainGroup,
-                !!loopCmdMsg.is_from_me,
-              )
-            ) {
+            if (isSessionCommandAllowed(isMainGroup, !!loopCmdMsg.is_from_me)) {
               queue.closeStdin(chatJid);
             }
             // Enqueue so processGroupMessages handles auth + cursor advancement.
@@ -565,6 +563,10 @@ async function main(): Promise<void> {
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
   );
+
+  // Start Google token vendor (containers fetch short-lived OAuth tokens from this)
+  const googleTokenVendorPort = await startGoogleTokenVendor();
+  logger.info({ port: googleTokenVendorPort }, 'Google token vendor started');
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {

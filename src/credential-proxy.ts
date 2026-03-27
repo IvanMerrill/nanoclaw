@@ -32,10 +32,7 @@ const upstreamProxyAgent = envProxyUrl
  * Only forward requests to known Anthropic API paths.
  * Any request to an unlisted path gets 403 Forbidden.
  */
-const ALLOWED_PATHS = [
-  '/v1/messages',
-  '/api/oauth/claude_cli/create_api_key',
-];
+const ALLOWED_PATHS = ['/v1/messages', '/api/oauth/claude_cli/create_api_key'];
 
 function isAllowedPath(requestUrl: string | undefined): boolean {
   if (!requestUrl) return false;

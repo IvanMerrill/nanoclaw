@@ -65,6 +65,10 @@ COPY agent-runner/ ./
 # Build TypeScript
 RUN npm run build
 
+# Install Google MCP server
+COPY nanoclaw-google-mcp ./nanoclaw-google-mcp
+RUN cd nanoclaw-google-mcp && npm ci && npm run build
+
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
 

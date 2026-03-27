@@ -4,7 +4,6 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import {
@@ -44,6 +43,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   allowedTools?: string[]; // If provided, overrides default tool list in agent-runner
+  additionalAllowedTools?: string[]; // Merged into allowed tools by agent-runner
 }
 
 export interface ContainerOutput {
@@ -197,27 +197,6 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Gmail credentials directory (for Gmail MCP inside the container)
-  const homeDir = os.homedir();
-  const gmailDir = path.join(homeDir, '.gmail-mcp');
-  if (fs.existsSync(gmailDir)) {
-    mounts.push({
-      hostPath: gmailDir,
-      containerPath: '/home/node/.gmail-mcp',
-      readonly: false, // MCP may need to refresh OAuth tokens
-    });
-  }
-
-  // Calendar credentials directory (for calendar MCP inside the container)
-  const calendarDir = path.join(homeDir, '.calendar-mcp');
-  if (fs.existsSync(calendarDir)) {
-    mounts.push({
-      hostPath: calendarDir,
-      containerPath: '/home/node/.calendar-mcp',
-      readonly: false, // MCP may need to refresh OAuth tokens
-    });
-  }
-
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -343,6 +322,12 @@ function buildContainerArgs(
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
+
+  // Google token vendor URL for container-side Google MCP
+  args.push(
+    '-e',
+    `NANOCLAW_GOOGLE_TOKEN_URL=http://${CONTAINER_HOST_GATEWAY}:3002/token`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

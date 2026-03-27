@@ -28,8 +28,40 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   allowedTools?: string[]; // If provided, overrides DEFAULT_ALLOWED_TOOLS
+  additionalAllowedTools?: string[];    // If provided, APPENDED to DEFAULT_ALLOWED_TOOLS
 }
 
+const GOOGLE_SAFE_TOOLS = [
+  'mcp__google__search_emails',
+  'mcp__google__read_email',
+  'mcp__google__list_email_labels',
+  'mcp__google__get_or_create_label',
+  'mcp__google__modify_email',
+  'mcp__google__batch_modify_emails',
+  'mcp__google__draft_email',
+  'mcp__google__download_attachment',
+  'mcp__google__list_events',
+  'mcp__google__get_event',
+  'mcp__google__create_event',
+  'mcp__google__update_event',
+  'mcp__google__delete_event',
+  'mcp__google__list_drive_files',
+  'mcp__google__export_drive_file',
+  'mcp__google__upload_drive_file',
+  'mcp__google__update_drive_file_content',
+  'mcp__google__get_doc_metadata',
+  'mcp__google__create_doc',
+  'mcp__google__update_doc',
+  'mcp__google__list_sheets',
+  'mcp__google__read_sheet_range',
+  'mcp__google__create_spreadsheet',
+  'mcp__google__write_sheet_range',
+  'mcp__google__get_presentation_metadata',
+  'mcp__google__create_presentation',
+  'mcp__google__read_document',
+];
+
+// NOTE: mcp__google__send_email is intentionally excluded. See spec §4.1.
 const DEFAULT_ALLOWED_TOOLS = [
   'Bash',
   'Read', 'Write', 'Edit', 'Glob', 'Grep',
@@ -39,8 +71,8 @@ const DEFAULT_ALLOWED_TOOLS = [
   'TodoWrite', 'ToolSearch', 'Skill',
   'NotebookEdit',
   'mcp__nanoclaw__*',
-  'mcp__gmail__*',
-  'mcp__calendar__*',
+  ...GOOGLE_SAFE_TOOLS,
+  'mcp__context7__*',
 ];
 
 interface ContainerOutput {
@@ -419,6 +451,8 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -429,7 +463,8 @@ async function runQuery(
       systemPrompt: systemPromptAppend
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
         : undefined,
-      allowedTools: containerInput.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+      allowedTools: containerInput.allowedTools
+        ?? [...DEFAULT_ALLOWED_TOOLS, ...(containerInput.additionalAllowedTools ?? [])],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
@@ -444,13 +479,16 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
-        gmail: {
-          command: 'npx',
-          args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+        google: {
+          command: 'node',
+          args: [path.join(__dirname, '../../nanoclaw-google-mcp/dist/index.js')],
+          env: {
+            NANOCLAW_GOOGLE_TOKEN_URL: process.env.NANOCLAW_GOOGLE_TOKEN_URL ?? '',
+          },
         },
-        calendar: {
+        context7: {
           command: 'npx',
-          args: ['-y', '@gongrzhe/server-calendar-autoauth-mcp']
+          args: ['-y', '@upstash/context7-mcp@latest'],
         }
       },
       hooks: {
@@ -514,8 +552,10 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
+  const mcpServerPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'ipc-mcp-stdio.js',
+  );
 
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
