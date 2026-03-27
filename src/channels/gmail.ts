@@ -47,13 +47,13 @@ export class GmailChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const credDir = path.join(os.homedir(), '.gmail-mcp');
-    const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
-    const tokensPath = path.join(credDir, 'credentials.json');
+    const credDir = path.join(os.homedir(), '.nanoclaw-google-mcp');
+    const keysPath = path.join(credDir, 'oauth-readonly.json');
+    const tokensPath = path.join(credDir, 'readonly-credentials.json');
 
     if (!fs.existsSync(keysPath) || !fs.existsSync(tokensPath)) {
       logger.warn(
-        'Gmail credentials not found in ~/.gmail-mcp/. Skipping Gmail channel. Run /add-gmail to set up.',
+        'Gmail credentials not found in ~/.nanoclaw-google-mcp/. Skipping Gmail channel.',
       );
       return;
     }
@@ -401,12 +401,14 @@ export class GmailChannel implements Channel {
 }
 
 registerChannel('gmail', (opts: ChannelOpts) => {
-  const credDir = path.join(os.homedir(), '.gmail-mcp');
+  const credDir = path.join(os.homedir(), '.nanoclaw-google-mcp');
   if (
-    !fs.existsSync(path.join(credDir, 'gcp-oauth.keys.json')) ||
-    !fs.existsSync(path.join(credDir, 'credentials.json'))
+    !fs.existsSync(path.join(credDir, 'oauth-readonly.json')) ||
+    !fs.existsSync(path.join(credDir, 'readonly-credentials.json'))
   ) {
-    logger.warn('Gmail: credentials not found in ~/.gmail-mcp/');
+    logger.warn(
+      'Gmail: credentials not found in ~/.nanoclaw-google-mcp/. Run the Google MCP auth setup.',
+    );
     return null;
   }
   return new GmailChannel(opts);
