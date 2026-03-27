@@ -327,8 +327,13 @@ export async function processTaskIpc(
 
         // Block send_email in scheduled tasks — only interactive messages may send email
         if (data.allowed_tools?.includes('mcp__google__send_email')) {
-          logger.warn({ data }, 'schedule_task cannot include send_email — removed');
-          data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+          logger.warn(
+            { data },
+            'schedule_task cannot include send_email — removed',
+          );
+          data.allowed_tools = data.allowed_tools.filter(
+            (t: string) => t !== 'mcp__google__send_email',
+          );
         }
 
         const taskId =
@@ -448,8 +453,13 @@ export async function processTaskIpc(
         if (data.allowed_tools !== undefined) {
           // Block send_email in task updates — only interactive messages may send email
           if (data.allowed_tools.includes('mcp__google__send_email')) {
-            logger.warn({ data }, 'update_task cannot include send_email — removed');
-            data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+            logger.warn(
+              { data },
+              'update_task cannot include send_email — removed',
+            );
+            data.allowed_tools = data.allowed_tools.filter(
+              (t: string) => t !== 'mcp__google__send_email',
+            );
           }
           updates.allowed_tools = JSON.stringify(data.allowed_tools);
         }
@@ -522,8 +532,13 @@ export async function processTaskIpc(
       }
       // Block send_email in spawn_agent — only interactive messages may send email
       if (data.allowed_tools.includes('mcp__google__send_email')) {
-        logger.warn({ data }, 'spawn_agent cannot include send_email — removed');
-        data.allowed_tools = data.allowed_tools.filter((t: string) => t !== 'mcp__google__send_email');
+        logger.warn(
+          { data },
+          'spawn_agent cannot include send_email — removed',
+        );
+        data.allowed_tools = data.allowed_tools.filter(
+          (t: string) => t !== 'mcp__google__send_email',
+        );
       }
       // Only main group can spawn sub-agents
       if (!isMain) {

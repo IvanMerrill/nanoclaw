@@ -27,7 +27,11 @@ vi.mock('fs', async () => {
   };
 });
 
-import { _isOversizedIpcFile, _isRateLimited, _resetRateLimits } from './ipc.js';
+import {
+  _isOversizedIpcFile,
+  _isRateLimited,
+  _resetRateLimits,
+} from './ipc.js';
 import { logger } from './logger.js';
 
 beforeEach(() => {

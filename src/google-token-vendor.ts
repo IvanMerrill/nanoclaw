@@ -179,8 +179,7 @@ export async function startGoogleTokenVendor(): Promise<number> {
             }),
           );
         } catch (err) {
-          const message =
-            err instanceof Error ? err.message : 'Unknown error';
+          const message = err instanceof Error ? err.message : 'Unknown error';
           logger.warn({ scope, err: message }, 'Google token vendor error');
           res.writeHead(503, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ error: message }));

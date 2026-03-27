@@ -220,7 +220,12 @@ describe('spawn_agent IPC', () => {
 
     // Capture the onOutput callback and call it
     mockRunContainerAgent.mockImplementationOnce(
-      async (_group: unknown, _opts: unknown, _onProcess: unknown, onOutput: (o: { result: string }) => void) => {
+      async (
+        _group: unknown,
+        _opts: unknown,
+        _onProcess: unknown,
+        onOutput: (o: { result: string }) => void,
+      ) => {
         onOutput({ result: 'task completed' });
       },
     );
@@ -341,10 +346,9 @@ describe('spawn_agent IPC', () => {
       deps,
     );
 
-    expect(mockMkdirSync).toHaveBeenCalledWith(
-      '/tmp/ipc/main/tasks',
-      { recursive: true },
-    );
+    expect(mockMkdirSync).toHaveBeenCalledWith('/tmp/ipc/main/tasks', {
+      recursive: true,
+    });
   });
 
   describe('concurrency cap', () => {

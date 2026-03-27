@@ -67,7 +67,11 @@ async function freshImport() {
 
 const VALID_ALLOWLIST = JSON.stringify({
   allowedRoots: [
-    { path: '/home/user/projects', allowReadWrite: true, description: 'Projects' },
+    {
+      path: '/home/user/projects',
+      allowReadWrite: true,
+      description: 'Projects',
+    },
     { path: '/home/user/docs', allowReadWrite: false, description: 'Docs' },
   ],
   blockedPatterns: ['custom-secret'],
@@ -211,10 +215,7 @@ describe('validateMount', () => {
     });
     const mod = await freshImport();
 
-    const result = mod.validateMount(
-      { hostPath: '/nonexistent/path' },
-      true,
-    );
+    const result = mod.validateMount({ hostPath: '/nonexistent/path' }, true);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('does not exist');
   });
@@ -239,10 +240,7 @@ describe('validateMount', () => {
     mockRealpathSync.mockImplementation((p: string) => p);
     const mod = await freshImport();
 
-    const result = mod.validateMount(
-      { hostPath: '/var/lib/data' },
-      true,
-    );
+    const result = mod.validateMount({ hostPath: '/var/lib/data' }, true);
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('not under any allowed root');
   });

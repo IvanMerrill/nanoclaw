@@ -316,9 +316,15 @@ describe('storeMessage truncation', () => {
       timestamp: '2024-01-01T00:00:01.000Z',
     });
 
-    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
     expect(msgs).toHaveLength(1);
-    expect(msgs[0].content.length).toBe(10_000 + '\n[Message truncated]'.length);
+    expect(msgs[0].content.length).toBe(
+      10_000 + '\n[Message truncated]'.length,
+    );
     expect(msgs[0].content.endsWith('\n[Message truncated]')).toBe(true);
   });
 
@@ -333,7 +339,11 @@ describe('storeMessage truncation', () => {
       timestamp: '2024-01-01T00:00:02.000Z',
     });
 
-    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toBe(exactContent);
   });
@@ -349,9 +359,15 @@ describe('storeMessage truncation', () => {
       timestamp: '2024-01-01T00:00:03.000Z',
     });
 
-    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
     expect(msgs).toHaveLength(1);
-    expect(msgs[0].content.length).toBe(10_000 + '\n[Message truncated]'.length);
+    expect(msgs[0].content.length).toBe(
+      10_000 + '\n[Message truncated]'.length,
+    );
   });
 
   it('appends [Message truncated] marker', () => {
@@ -364,7 +380,11 @@ describe('storeMessage truncation', () => {
       timestamp: '2024-01-01T00:00:04.000Z',
     });
 
-    const msgs = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+    const msgs = getMessagesSince(
+      'group@g.us',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
     expect(msgs[0].content).toContain('[Message truncated]');
     expect(msgs[0].content.startsWith('d'.repeat(10_000))).toBe(true);
   });

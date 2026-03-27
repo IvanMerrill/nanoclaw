@@ -3,10 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { findChannel } from './router.js';
 import { Channel } from './types.js';
 
-function mockChannel(
-  ownsJidResult: boolean,
-  connected: boolean,
-): Channel {
+function mockChannel(ownsJidResult: boolean, connected: boolean): Channel {
   return {
     name: 'test',
     connect: async () => {},

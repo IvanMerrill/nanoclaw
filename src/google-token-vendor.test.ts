@@ -114,10 +114,7 @@ describe('google-token-vendor', () => {
     process.env.GOOGLE_TOKEN_VENDOR_PORT = String(port);
     await startGoogleTokenVendor();
 
-    const res = await makeRequest(
-      port,
-      JSON.stringify({ scope: 'readonly' }),
-    );
+    const res = await makeRequest(port, JSON.stringify({ scope: 'readonly' }));
 
     expect(res.statusCode).toBe(200);
     const data = JSON.parse(res.body);
@@ -134,10 +131,7 @@ describe('google-token-vendor', () => {
     process.env.GOOGLE_TOKEN_VENDOR_PORT = String(port);
     await startGoogleTokenVendor();
 
-    const res = await makeRequest(
-      port,
-      JSON.stringify({ scope: 'readonly' }),
-    );
+    const res = await makeRequest(port, JSON.stringify({ scope: 'readonly' }));
 
     expect(res.statusCode).toBe(503);
     const data = JSON.parse(res.body);
@@ -170,10 +164,7 @@ describe('google-token-vendor', () => {
     process.env.GOOGLE_TOKEN_VENDOR_PORT = String(port);
     await startGoogleTokenVendor();
 
-    const res = await makeRequest(
-      port,
-      JSON.stringify({ scope: 'readwrite' }),
-    );
+    const res = await makeRequest(port, JSON.stringify({ scope: 'readwrite' }));
 
     expect(res.statusCode).toBe(200);
     const data = JSON.parse(res.body);
