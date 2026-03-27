@@ -451,8 +451,6 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
   for await (const message of query({
     prompt: stream,
     options: {
@@ -481,7 +479,7 @@ async function runQuery(
         },
         google: {
           command: 'node',
-          args: [path.join(__dirname, '../../nanoclaw-google-mcp/dist/index.js')],
+          args: ['/app/nanoclaw-google-mcp/dist/index.js'],
           env: {
             NANOCLAW_GOOGLE_TOKEN_URL: process.env.NANOCLAW_GOOGLE_TOKEN_URL ?? '',
           },
