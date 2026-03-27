@@ -668,7 +668,7 @@ async function main(): Promise<void> {
       // Emit session-only marker so host updates session tracking
       writeOutput({ status: 'success', result: null, newSessionId: slashSessionId });
     }
-    return;
+    process.exit(0);
   }
   // --- End slash command handling ---
 
@@ -720,6 +720,11 @@ async function main(): Promise<void> {
     });
     process.exit(1);
   }
+
+  // Force exit: the SDK's claude process and MCP servers keep the event loop
+  // alive after the query loop ends. Without this, the container hangs until
+  // the hard timeout (30 min), blocking all new messages for the group.
+  process.exit(0);
 }
 
 main();
