@@ -260,3 +260,101 @@ export async function updateDriveFileContent(args: {
     return errorResult(`Drive update error: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+
+export async function createDriveFolder(args: {
+  name: string;
+  parent_folder_id?: string;
+}, getAuth: GetAuth): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
+  const trimmedName = (args.name ?? '').trim();
+  if (!trimmedName) {
+    return errorResult('Folder name must not be empty.');
+  }
+
+  const auth = await getAuth('readwrite');
+  if (typeof auth === 'string') return errorResult(auth);
+
+  const drive = google.drive({ version: 'v3', auth });
+
+  try {
+    const res = await drive.files.create({
+      requestBody: {
+        name: trimmedName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [args.parent_folder_id ?? 'root'],
+      },
+      fields: 'id,name,webViewLink',
+    });
+
+    return textResult(
+      JSON.stringify(
+        {
+          id: res.data.id,
+          name: res.data.name,
+          webViewLink: res.data.webViewLink,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (err) {
+    return errorResult(`Failed to create folder: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export async function moveDriveFile(args: {
+  file_id: string;
+  destination_folder_id: string;
+}, getAuth: GetAuth): Promise<{ content: { type: 'text'; text: string }[]; isError?: true }> {
+  const auth = await getAuth('readwrite');
+  if (typeof auth === 'string') return errorResult(auth);
+
+  const drive = google.drive({ version: 'v3', auth });
+
+  // Step 1: fetch current parents so we can remove them
+  let currentParents: string[];
+  try {
+    const fileRes = await drive.files.get({
+      fileId: args.file_id,
+      fields: 'id,parents',
+    });
+    currentParents = fileRes.data.parents ?? [];
+  } catch (err) {
+    if ((err as any).code === 404) {
+      return errorResult(`File ${args.file_id} not found in Drive.`);
+    }
+    return errorResult(`Failed to move file: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Step 2: reparent — remove all current parents, set only the destination
+  try {
+    const updateRes = await drive.files.update({
+      fileId: args.file_id,
+      addParents: args.destination_folder_id,
+      ...(currentParents.length > 0 ? { removeParents: currentParents.join(',') } : {}),
+      fields: 'id,name,parents',
+    });
+
+    const confirmedParent =
+      (updateRes.data.parents ?? [])[0] ?? args.destination_folder_id;
+
+    return textResult(
+      JSON.stringify(
+        {
+          id: updateRes.data.id,
+          name: updateRes.data.name,
+          parentId: confirmedParent,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (err) {
+    if ((err as any).code === 404) {
+      return errorResult(`Destination folder ${args.destination_folder_id} not found in Drive.`);
+    }
+    if ((err as any).code === 400) {
+      return errorResult('Cannot move a folder into its own subfolder.');
+    }
+    return errorResult(`Failed to move file: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}

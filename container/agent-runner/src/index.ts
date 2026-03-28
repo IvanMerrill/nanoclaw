@@ -52,6 +52,8 @@ const GOOGLE_SAFE_TOOLS = [
   'mcp__google__get_doc_metadata',
   'mcp__google__create_doc',
   'mcp__google__update_doc',
+  'mcp__google__create_drive_folder',
+  'mcp__google__move_drive_file',
   'mcp__google__list_sheets',
   'mcp__google__read_sheet_range',
   'mcp__google__create_spreadsheet',

@@ -31,6 +31,8 @@ import {
   exportDriveFile,
   uploadDriveFile,
   updateDriveFileContent,
+  createDriveFolder,
+  moveDriveFile,
 } from './drive.js';
 import { getDocMetadata, createDoc, updateDoc } from './docs.js';
 import { listSheets, readSheetRange, createSpreadsheet, writeSheetRange } from './sheets.js';
@@ -128,6 +130,8 @@ export const TOOL_SCOPES: Record<string, 'readonly' | 'readwrite' | 'none'> = {
   export_drive_file: 'readonly',
   upload_drive_file: 'readwrite',
   update_drive_file_content: 'readwrite',
+  create_drive_folder: 'readwrite',
+  move_drive_file: 'readwrite',
   // Docs
   get_doc_metadata: 'readonly',
   create_doc: 'readwrite',
@@ -485,6 +489,26 @@ server.tool(
   async (args) => updateDriveFileContent(args, getGoogleAuth),
 );
 
+server.tool(
+  'create_drive_folder',
+  'Create a new folder in Google Drive. Returns the folder ID for use in subsequent calls.',
+  {
+    name: z.string().describe('Display name for the folder'),
+    parent_folder_id: z.string().optional().describe('Parent folder ID. If omitted, folder is created in the root of My Drive.'),
+  },
+  async (args) => createDriveFolder(args, getGoogleAuth),
+);
+
+server.tool(
+  'move_drive_file',
+  'Move an existing Drive file or folder to a different parent folder. Removes all current parents and sets only the destination.',
+  {
+    file_id: z.string().describe('ID of the file or folder to move'),
+    destination_folder_id: z.string().describe('ID of the target folder'),
+  },
+  async (args) => moveDriveFile(args, getGoogleAuth),
+);
+
 // ===== Docs Tools =====
 
 server.tool(
@@ -504,10 +528,11 @@ server.tool(
   'Create a new Google Doc with initial content.',
   {
     title: z.string().describe('Document title'),
+    folder_id: z.string().optional().describe('If provided, move the doc into this folder after creation'),
   },
   async (args) =>
     gmailHandler('create_doc', (getAuth) =>
-      createDoc({ title: args.title }, getAuth),
+      createDoc({ title: args.title, folder_id: args.folder_id }, getAuth),
     ),
 );
 
