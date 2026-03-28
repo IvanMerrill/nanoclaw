@@ -91,11 +91,13 @@ describe('extractText', () => {
   it('calls pdftotext for PDF files', async () => {
     // Mock execFile via promisify — the module mocks child_process.execFile,
     // and promisify wraps it. We need to make the callback-style mock work.
-    vi.mocked(execFile).mockImplementation(
-      ((_cmd: any, _args: any, callback: any) => {
-        callback(null, { stdout: 'pdf content', stderr: '' });
-      }) as any,
-    );
+    vi.mocked(execFile).mockImplementation(((
+      _cmd: any,
+      _args: any,
+      callback: any,
+    ) => {
+      callback(null, { stdout: 'pdf content', stderr: '' });
+    }) as any);
 
     const result = await extractText('/tmp/test.pdf');
     expect(result).toBe('pdf content');
@@ -133,11 +135,13 @@ describe('extractText', () => {
   });
 
   it('returns null when pdftotext fails', async () => {
-    vi.mocked(execFile).mockImplementation(
-      ((_cmd: any, _args: any, callback: any) => {
-        callback(new Error('pdftotext not found'));
-      }) as any,
-    );
+    vi.mocked(execFile).mockImplementation(((
+      _cmd: any,
+      _args: any,
+      callback: any,
+    ) => {
+      callback(new Error('pdftotext not found'));
+    }) as any);
 
     const result = await extractText('/tmp/test.pdf');
     expect(result).toBeNull();

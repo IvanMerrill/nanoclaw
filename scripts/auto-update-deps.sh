@@ -1,119 +1,268 @@
 #!/bin/bash
-# Automated dependency update for NanoClaw via headless Claude Code.
+# Nightly dependency update: minor/patch daily, major on Sundays.
+# Runs via launchd at 04:30 daily.
 #
 # Usage:
-#   ./scripts/auto-update-deps.sh          # minor/patch only (daily)
-#   ./scripts/auto-update-deps.sh --major  # include major bumps (weekly)
-#   ./scripts/auto-update-deps.sh --dry-run # just report what's available
-#
-# Launches a headless Claude Code session that handles the full update
-# lifecycle: check, update, build, test, fix, commit, rebuild, restart.
+#   ./scripts/auto-update-deps.sh            # auto-detect mode from day-of-week
+#   ./scripts/auto-update-deps.sh --major    # force major mode
+#   ./scripts/auto-update-deps.sh --dry-run  # just report outdated packages
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$PROJECT_ROOT"
+LOG_PREFIX="[update-deps]"
+JOB_NAME="update-deps"
 
-MODE="minor"
+source "$PROJECT_ROOT/scripts/nightly-common.sh"
+
+MAIN_CHAT_JID=$(resolve_main_chat_jid)
+
 DRY_RUN=false
+FORCE_MAJOR=false
 for arg in "$@"; do
   case "$arg" in
-    --major) MODE="major" ;;
     --dry-run) DRY_RUN=true ;;
+    --major) FORCE_MAJOR=true ;;
   esac
 done
 
-LOG_PREFIX="[auto-update-deps]"
-log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+# Determine mode: major on Sundays (day 7), minor otherwise
+DAY_OF_WEEK=$(date +%u)
+if [ "$FORCE_MAJOR" = true ] || [ "$DAY_OF_WEEK" = "7" ]; then
+  MODE="major"
+else
+  MODE="minor"
+fi
+
+log "Mode: $MODE (day $DAY_OF_WEEK)"
 
 if [ "$DRY_RUN" = true ]; then
   log "Dry run — checking for updates..."
-  echo "=== Host ===" && npm outdated 2>/dev/null || true
-  echo "=== agent-runner ===" && (cd container/agent-runner && npm outdated 2>/dev/null) || true
-  echo "=== google-mcp ===" && (cd container/nanoclaw-google-mcp && npm outdated 2>/dev/null) || true
+  echo "=== Host ===" && (cd "$PROJECT_ROOT" && npm outdated 2>/dev/null) || true
+  echo "=== agent-runner ===" && (cd "$PROJECT_ROOT/container/agent-runner" && npm outdated 2>/dev/null) || true
+  echo "=== google-mcp ===" && (cd "$PROJECT_ROOT/container/nanoclaw-google-mcp" && npm outdated 2>/dev/null) || true
   exit 0
 fi
 
-# Work in an isolated git worktree so the main working directory is never
-# touched — this means the script succeeds even if the main tree is dirty.
-WORKTREE_DIR="$PROJECT_ROOT/.worktrees/update-deps-$(date +%Y%m%d-%H%M%S)"
-WORKTREE_BRANCH="update-deps-$(date +%Y%m%d)"
-mkdir -p "$(dirname "$WORKTREE_DIR")"
-
-cleanup_worktree() {
-  if [ -d "$WORKTREE_DIR" ]; then
-    log "Cleaning up worktree..."
-    git -C "$PROJECT_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
-    git -C "$PROJECT_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
-  fi
-}
+# Set up worktree
+setup_worktree
 trap cleanup_worktree EXIT
 
-log "Creating worktree at $WORKTREE_DIR..."
-git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_DIR" main 2>&1
-
 if [ "$MODE" = "minor" ]; then
-  PROMPT="Update NanoClaw dependencies (minor/patch only — stay within semver ranges).
+  PROMPT=$(cat <<ENDPROMPT
+You are performing an automated nightly dependency update for NanoClaw (minor/patch only).
 
-You are working in a git worktree at: $WORKTREE_DIR
-The main repo is at: $PROJECT_ROOT
-All commands must run inside the worktree directory.
-
-There are three package trees:
-- Host: worktree root (npm update)
-- Container agent-runner: container/agent-runner (npm update)
-- Container Google MCP: container/nanoclaw-google-mcp (npm update)
-
-Steps:
-1. cd into the worktree: \`cd $WORKTREE_DIR\`
-2. Run \`npm update\` in each of the three directories
-3. Check if anything changed with \`git status\`. If nothing changed, say 'No updates available' and stop.
-4. Build host: \`npm run build\` from worktree root
-5. Build google-mcp: \`cd container/nanoclaw-google-mcp && npm run build\`
-6. Test host: \`npm test\` from worktree root
-7. Test google-mcp: \`cd container/nanoclaw-google-mcp && npm test\`
-8. If any build or test fails, investigate and fix. If unfixable, roll back with \`git checkout -- .\` and report what failed.
-9. Commit all changes: \`git add -A && git commit -m 'chore: automated dependency update YYYY-MM-DD'\`
-10. Push to main: \`git push origin $WORKTREE_BRANCH:main\`
-11. Pull in main repo and rebuild container:
-    \`cd $PROJECT_ROOT && git pull && CONTAINER_RUNTIME=docker ./container/build.sh\`
-12. Restart NanoClaw: \`launchctl kickstart -k gui/\$(id -u)/com.nanoclaw\`
-13. Verify startup by checking the last 10 lines of $PROJECT_ROOT/logs/nanoclaw-launchd.log for errors
-
-Do not make any code changes beyond what's needed to fix build/test failures from the updates."
-else
-  PROMPT="Update NanoClaw dependencies including MAJOR version bumps.
-
-You are working in a git worktree at: $WORKTREE_DIR
-The main repo is at: $PROJECT_ROOT
-All commands must run inside the worktree directory.
+WORKING DIRECTORY: $WORKTREE_DIR
+MAIN REPO: $PROJECT_ROOT
+All git and build commands must run inside $WORKTREE_DIR unless stated otherwise.
 
 There are three package trees:
 - Host: worktree root
 - Container agent-runner: container/agent-runner
 - Container Google MCP: container/nanoclaw-google-mcp
 
-Steps:
-1. cd into the worktree: \`cd $WORKTREE_DIR\`
-2. Run \`npm outdated\` in each directory to see what major updates are available
-3. If no major updates exist, say 'No major updates available' and stop.
-4. For each major update, one at a time:
-   a. Search the web for the package's changelog or release notes to understand breaking changes
-   b. Install the update: \`npm install <pkg>@latest\` in the correct directory
-   c. Build the relevant tree
-   d. If the build fails, fix the code to accommodate breaking changes
-   e. Test the relevant tree
-   f. If tests fail, fix the code
-   g. If the update is too risky or requires extensive rewriting, revert it with \`git checkout -- .\` and skip to the next package
-   h. Commit this single update: \`git add -A && git commit -m 'chore: update <pkg> <old> → <new>'\` noting any code changes
-5. After all updates, run the full test suite from worktree root: \`npm test\`
-6. Push to main: \`git push origin $WORKTREE_BRANCH:main\`
-7. Pull in main repo and rebuild container:
-   \`cd $PROJECT_ROOT && git pull && CONTAINER_RUNTIME=docker ./container/build.sh\`
-8. Restart NanoClaw: \`launchctl kickstart -k gui/\$(id -u)/com.nanoclaw\`
-9. Verify startup by checking the last 10 lines of $PROJECT_ROOT/logs/nanoclaw-launchd.log for errors
+STEP 1 — UPDATE
 
-Be conservative — skip updates that need major refactoring. Each commit should be atomic and revertable."
+cd $WORKTREE_DIR
+Run \`npm update\` in each of the three directories:
+  npm update
+  cd container/agent-runner && npm update && cd ../..
+  cd container/nanoclaw-google-mcp && npm update && cd ../..
+
+STEP 2 — CHECK FOR CHANGES
+
+Run \`git diff --stat\` to see if anything changed.
+If nothing changed, write an IPC notification and stop:
+  node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const msg = { type: 'message', chatJid: process.argv[1], text: process.argv[2] };
+    const dir = process.argv[3];
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'nightly-deps-' + Date.now() + '.json'), JSON.stringify(msg));
+  " "$MAIN_CHAT_JID" "*Nightly dependency update* — all packages up to date." "$PROJECT_ROOT/data/ipc/telegram_main/messages"
+
+STEP 3 — IDENTIFY CHANGES
+
+Capture what changed: run \`npm outdated\` or \`git diff package-lock.json\` to identify updated packages and versions.
+
+STEP 4 — BUILD AND TEST
+
+Build:
+  npm run build
+  cd container/nanoclaw-google-mcp && npm run build
+
+Test:
+  cd $WORKTREE_DIR
+  npm test
+  cd container/nanoclaw-google-mcp && npm test
+
+If build or test fails:
+  - Investigate and try to fix (max 2 attempts)
+  - If unfixable: \`git checkout -- .\` and write IPC notification about the failure, then stop
+
+STEP 5 — COMMIT AND PUSH
+
+git add -A && git commit -m "chore: automated dependency update $(date +%Y-%m-%d)"
+git push origin $WORKTREE_BRANCH:main
+
+STEP 6 — PULL AND REBUILD
+
+cd $PROJECT_ROOT && git pull --ff-only origin main || true
+CONTAINER_RUNTIME=docker $PROJECT_ROOT/container/build.sh
+
+STEP 7 — NOTIFY
+
+Write an IPC notification listing updated packages and build/test status:
+  node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const msg = { type: 'message', chatJid: process.argv[1], text: process.argv[2] };
+    const dir = process.argv[3];
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'nightly-deps-' + Date.now() + '.json'), JSON.stringify(msg));
+  " "$MAIN_CHAT_JID" "<your formatted summary>" "$PROJECT_ROOT/data/ipc/telegram_main/messages"
+
+Format the summary using Telegram formatting:
+  *single asterisks* for bold, • for bullet points, _underscores_ for italic.
+  Include: which packages were updated (name and version range), build/test status.
+
+STEP 8 — RESTART AND VERIFY
+
+launchctl kickstart -k "gui/\$(id -u)/com.nanoclaw"
+sleep 8
+
+Check Ren is running:
+  pgrep -f "node.*dist/index.js"
+
+If NOT running:
+  cd $PROJECT_ROOT
+  git revert HEAD --no-edit
+  npm install && npm run build
+  git push origin main
+  launchctl kickstart -k "gui/\$(id -u)/com.nanoclaw"
+  sleep 8
+  If now running, write IPC notification about rollback (same node -e approach)
+  If still not running, log CRITICAL error
+
+IMPORTANT:
+- NEVER force push
+- Do not make any code changes beyond what is needed to fix build/test failures from the updates
+- Every step must be logged clearly
+ENDPROMPT
+)
+else
+  PROMPT=$(cat <<ENDPROMPT
+You are performing an automated nightly dependency update for NanoClaw (major version bumps included).
+
+WORKING DIRECTORY: $WORKTREE_DIR
+MAIN REPO: $PROJECT_ROOT
+All git and build commands must run inside $WORKTREE_DIR unless stated otherwise.
+
+There are three package trees:
+- Host: worktree root
+- Container agent-runner: container/agent-runner
+- Container Google MCP: container/nanoclaw-google-mcp
+
+PHASE 1 — MINOR/PATCH UPDATES
+
+cd $WORKTREE_DIR
+Run \`npm update\` in each of the three directories:
+  npm update
+  cd container/agent-runner && npm update && cd ../..
+  cd container/nanoclaw-google-mcp && npm update && cd ../..
+
+If anything changed:
+  npm run build
+  cd container/nanoclaw-google-mcp && npm run build
+  cd $WORKTREE_DIR && npm test
+  cd container/nanoclaw-google-mcp && npm test
+  If build/test fails: try to fix (max 2 attempts). If unfixable: \`git checkout -- .\` and write notification about the failure.
+  If successful: git add -A && git commit -m "chore: automated minor dependency update $(date +%Y-%m-%d)"
+
+PHASE 2 — MAJOR VERSION BUMPS
+
+Run \`npm outdated\` in all three trees to find packages with major version bumps available.
+If no major updates exist, proceed to Phase 3 with just the minor changes.
+
+For each major update, one at a time:
+
+  a. Search the web for the changelog or release notes of the package
+  b. Classify the update:
+
+     DECISION: <package> <current> → <latest>
+     Verdict: APPLY|REVIEW|SKIP
+     Reason: <explanation>
+
+  c. Risk rules — classify as REVIEW if:
+     - It is a core dependency (typescript, grammy, @anthropic-ai/sdk, vitest, better-sqlite3, sharp)
+     - The changelog mentions removed or renamed APIs that we use
+     - It requires more than 20 lines of code modification
+
+  d. For APPLY (safe, <20 lines of code changes needed):
+     - Install: \`npm install <pkg>@latest\` in the correct directory
+     - Build the relevant tree
+     - Test the relevant tree
+     - If build/test fails, try to fix (max 2 attempts). If unfixable, revert with \`git checkout -- .\` and reclassify as SKIP
+     - Commit individually: \`git add -A && git commit -m "chore: update <pkg> <old> → <new>"\`
+
+  e. For REVIEW: note for the notification summary — Ivan will handle these manually
+
+  f. For SKIP: log the reason
+
+PHASE 3 — PUSH AND REBUILD
+
+git push origin $WORKTREE_BRANCH:main
+cd $PROJECT_ROOT && git pull --ff-only origin main || true
+CONTAINER_RUNTIME=docker $PROJECT_ROOT/container/build.sh
+
+PHASE 4 — NOTIFY
+
+Write an IPC notification:
+  node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const msg = { type: 'message', chatJid: process.argv[1], text: process.argv[2] };
+    const dir = process.argv[3];
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'nightly-deps-' + Date.now() + '.json'), JSON.stringify(msg));
+  " "$MAIN_CHAT_JID" "<your formatted summary>" "$PROJECT_ROOT/data/ipc/telegram_main/messages"
+
+Format the summary using Telegram formatting:
+  *single asterisks* for bold, • for bullet points, _underscores_ for italic.
+  Include:
+  - Minor/patch updates applied (package list)
+  - Major updates applied (with APPLY decisions)
+  - Major updates needing review (with REVIEW decisions and reasons)
+  - Major updates skipped (with SKIP reasons)
+  - Build/test status
+
+PHASE 5 — RESTART AND VERIFY
+
+launchctl kickstart -k "gui/\$(id -u)/com.nanoclaw"
+sleep 8
+
+Check Ren is running:
+  pgrep -f "node.*dist/index.js"
+
+If NOT running:
+  cd $PROJECT_ROOT
+  git revert HEAD --no-edit
+  npm install && npm run build
+  git push origin main
+  launchctl kickstart -k "gui/\$(id -u)/com.nanoclaw"
+  sleep 8
+  If now running, write IPC notification about rollback (same node -e approach)
+  If still not running, log CRITICAL error
+
+IMPORTANT:
+- NEVER force push
+- Be conservative — skip updates that need major refactoring
+- Each major update commit should be atomic and revertable
+- Every decision must be logged with reasoning
+- If you cannot complete the task, explain why clearly in the log output
+ENDPROMPT
+)
 fi
 
 log "Starting $MODE dependency update via Claude Code..."

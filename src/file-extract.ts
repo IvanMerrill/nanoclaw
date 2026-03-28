@@ -12,9 +12,26 @@ const execFileAsync = promisify(execFile);
 export const MAX_EXTRACT_CHARS = 30_000;
 
 const TEXT_EXTENSIONS = new Set([
-  '.txt', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
-  '.log', '.py', '.js', '.ts', '.sh', '.html', '.css',
-  '.env', '.toml', '.ini', '.cfg', '.conf', '.sql',
+  '.txt',
+  '.md',
+  '.json',
+  '.csv',
+  '.xml',
+  '.yaml',
+  '.yml',
+  '.log',
+  '.py',
+  '.js',
+  '.ts',
+  '.sh',
+  '.html',
+  '.css',
+  '.env',
+  '.toml',
+  '.ini',
+  '.cfg',
+  '.conf',
+  '.sql',
 ]);
 
 export function sanitizeFilename(name: string): string {

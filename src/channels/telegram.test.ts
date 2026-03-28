@@ -26,12 +26,17 @@ vi.mock('../logger.js', () => ({
 
 // Mock file-extract
 vi.mock('../file-extract.js', () => ({
-  sanitizeFilename: vi.fn((name: string) => name.replace(/[^a-zA-Z0-9._-]/g, '_')),
+  sanitizeFilename: vi.fn((name: string) =>
+    name.replace(/[^a-zA-Z0-9._-]/g, '_'),
+  ),
   extractText: vi.fn().mockResolvedValue(null),
-  formatFileMessage: vi.fn((containerPath: string, text: string | null, caption: string) => {
-    if (text) return `[File: ${containerPath}]\n--- file contents ---\n${text}\n--- end file contents ---${caption}`;
-    return `[File: ${containerPath}]${caption}`;
-  }),
+  formatFileMessage: vi.fn(
+    (containerPath: string, text: string | null, caption: string) => {
+      if (text)
+        return `[File: ${containerPath}]\n--- file contents ---\n${text}\n--- end file contents ---${caption}`;
+      return `[File: ${containerPath}]${caption}`;
+    },
+  ),
 }));
 
 // Mock group-folder
