@@ -21,12 +21,6 @@ fi
 LOG_PREFIX="[upstream-sync]"
 log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
-# Ensure clean working tree
-if [ -n "$(git status --porcelain)" ]; then
-  log "ERROR: Working tree is dirty. Commit or stash changes first."
-  exit 1
-fi
-
 # Fetch upstream
 log "Fetching upstream..."
 git fetch upstream 2>&1
@@ -47,7 +41,29 @@ if [ "$DRY_RUN" = true ]; then
   exit 0
 fi
 
+# Work in an isolated git worktree so the main working directory is never
+# touched — this means the script succeeds even if the main tree is dirty.
+WORKTREE_DIR="$PROJECT_ROOT/.worktrees/upstream-sync-$(date +%Y%m%d-%H%M%S)"
+WORKTREE_BRANCH="upstream-sync-$(date +%Y%m%d)"
+mkdir -p "$(dirname "$WORKTREE_DIR")"
+
+cleanup_worktree() {
+  if [ -d "$WORKTREE_DIR" ]; then
+    log "Cleaning up worktree..."
+    git -C "$PROJECT_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+    git -C "$PROJECT_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  fi
+}
+trap cleanup_worktree EXIT
+
+log "Creating worktree at $WORKTREE_DIR..."
+git worktree add -b "$WORKTREE_BRANCH" "$WORKTREE_DIR" main 2>&1
+
 PROMPT="Sync NanoClaw with upstream changes. There are $NEW_COMMITS new commit(s) from upstream.
+
+You are working in a git worktree at: $WORKTREE_DIR
+The main repo is at: $PROJECT_ROOT
+All git and build commands must run inside the worktree directory.
 
 Context:
 - upstream remote: qwibitai/nanoclaw-docker-sandbox (the open-source base)
@@ -56,12 +72,11 @@ Context:
 - Conflicts are expected, especially in files we've heavily modified
 
 Steps:
-1. First, review what's coming in:
+1. cd into the worktree: \`cd $WORKTREE_DIR\`
+
+2. Review what's coming in:
    \`git log --oneline HEAD..upstream/main\`
    \`git diff HEAD...upstream/main --stat\`
-
-2. Create a sync branch:
-   \`git checkout -b upstream-sync-\$(date +%Y%m%d)\`
 
 3. Merge upstream:
    \`git merge upstream/main --no-edit\`
@@ -78,22 +93,23 @@ Steps:
    - When all resolved: \`git commit --no-edit\`
 
 5. Build and test:
-   - \`npm run build\` from project root
-   - \`npm test\` from project root
-   - \`cd container/nanoclaw-google-mcp && npm run build && npm test\`
+   - \`npm install && npm run build\` from worktree root
+   - \`npm test\` from worktree root
+   - \`cd container/nanoclaw-google-mcp && npm install && npm run build && npm test\`
    - If tests fail, investigate and fix. Commit fixes separately.
 
 6. If everything passes:
-   - Merge back to main: \`git checkout main && git merge upstream-sync-\$(date +%Y%m%d) --no-edit\`
-   - Delete the sync branch: \`git branch -d upstream-sync-\$(date +%Y%m%d)\`
-   - Rebuild container: \`CONTAINER_RUNTIME=docker ./container/build.sh\`
+   - Push the branch: \`git push origin $WORKTREE_BRANCH\`
+   - Fast-forward main: \`git push origin $WORKTREE_BRANCH:main\`
+   - Rebuild container from the main repo:
+     \`cd $PROJECT_ROOT && git pull && CONTAINER_RUNTIME=docker ./container/build.sh\`
    - Restart NanoClaw: \`launchctl kickstart -k gui/\$(id -u)/com.nanoclaw\`
-   - Verify startup: check last 10 lines of logs/nanoclaw-launchd.log for errors
-   - Push to origin: \`git push origin main\`
+   - Verify startup: check last 10 lines of $PROJECT_ROOT/logs/nanoclaw-launchd.log for errors
 
 7. If the merge is too complex or risky:
-   - Abort: \`git merge --abort && git checkout main && git branch -D upstream-sync-\$(date +%Y%m%d)\`
+   - Abort: \`git merge --abort\`
    - Report what went wrong so Ivan can handle it manually
+   - The worktree will be cleaned up automatically
 
 Important:
 - NEVER force push
