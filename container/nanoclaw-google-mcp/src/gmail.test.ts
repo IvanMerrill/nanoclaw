@@ -40,7 +40,7 @@ vi.mock('node:fs', () => ({
   },
 }));
 
-import { readEmail, downloadAttachment, sanitizeFilename, stripHtml, extractBody } from './gmail.js';
+import { readEmail, downloadAttachment, sanitizeFilename, stripHtml, extractBody, isAllowedAttachment } from './gmail.js';
 
 const fakeGetAuth = async () => ({} as OAuth2Client);
 
@@ -117,28 +117,168 @@ describe('downloadAttachment', () => {
     vi.clearAllMocks();
   });
 
-  it('should reject disallowed MIME types', async () => {
-    mockGet.mockResolvedValue({
-      data: {
-        id: 'msg3',
-        payload: {
-          parts: [
-            {
-              filename: 'malware.exe',
-              mimeType: 'application/x-msdownload',
-              body: { attachmentId: 'att1', size: 1000 },
-            },
-          ],
-        },
+  it('downloads a PDF with explicit application/pdf MIME type', async () => {
+    mockAttachmentsGet.mockResolvedValue({
+      data: { data: Buffer.from('PDF content').toString('base64url') },
+    });
+
+    const result = await downloadAttachment(
+      {
+        messageId: 'msg1',
+        attachmentId: 'att-abc',
+        filename: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        size: 100,
       },
+      fakeGetAuth,
+    );
+
+    expect(mockGet).not.toHaveBeenCalled(); // no re-fetch of message metadata
+    expect(mockAttachmentsGet).toHaveBeenCalledWith({
+      userId: 'me',
+      messageId: 'msg1',
+      id: 'att-abc',
+    });
+    expect(result.savedPath).toContain('invoice.pdf');
+  });
+
+  it('downloads a PDF labeled application/octet-stream using extension fallback', async () => {
+    mockAttachmentsGet.mockResolvedValue({
+      data: { data: Buffer.from('PDF content').toString('base64url') },
+    });
+
+    const result = await downloadAttachment(
+      {
+        messageId: 'msg1',
+        attachmentId: 'att-abc',
+        filename: 'Factuur_260813409.pdf',
+        mimeType: 'application/octet-stream',
+      },
+      fakeGetAuth,
+    );
+
+    expect(result.savedPath).toContain('Factuur_260813409.pdf');
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('downloads when mime_type is absent and filename has known extension', async () => {
+    mockAttachmentsGet.mockResolvedValue({
+      data: { data: Buffer.from('image data').toString('base64url') },
+    });
+
+    const result = await downloadAttachment(
+      { messageId: 'msg1', attachmentId: 'att-abc', filename: 'photo.png' },
+      fakeGetAuth,
+    );
+
+    expect(result.savedPath).toContain('photo.png');
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects disallowed explicit MIME types', async () => {
+    await expect(
+      downloadAttachment(
+        {
+          messageId: 'msg1',
+          attachmentId: 'att1',
+          filename: 'malware.exe',
+          mimeType: 'application/x-msdownload',
+        },
+        fakeGetAuth,
+      ),
+    ).rejects.toThrow('MIME type "application/x-msdownload" is not allowed');
+
+    expect(mockAttachmentsGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects by pre-download size when size parameter is provided', async () => {
+    await expect(
+      downloadAttachment(
+        {
+          messageId: 'msg1',
+          attachmentId: 'att1',
+          filename: 'big.pdf',
+          mimeType: 'application/pdf',
+          size: 11 * 1024 * 1024, // 11MB > 10MB limit
+        },
+        fakeGetAuth,
+      ),
+    ).rejects.toThrow('exceeds maximum');
+
+    expect(mockAttachmentsGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects by post-download size when content exceeds limit', async () => {
+    const bigBuffer = Buffer.alloc(11 * 1024 * 1024);
+    mockAttachmentsGet.mockResolvedValue({
+      data: { data: bigBuffer.toString('base64url') },
     });
 
     await expect(
       downloadAttachment(
-        { messageId: 'msg3', attachmentId: 'att1' },
+        { messageId: 'msg1', attachmentId: 'att1', filename: 'big.pdf', mimeType: 'application/pdf' },
         fakeGetAuth,
       ),
-    ).rejects.toThrow('MIME type "application/x-msdownload" is not allowed');
+    ).rejects.toThrow('too large');
+  });
+
+  it('surfaces Attachment not found when attachments.get returns 404', async () => {
+    mockAttachmentsGet.mockRejectedValue(Object.assign(new Error('Not found'), { code: 404 }));
+
+    await expect(
+      downloadAttachment(
+        { messageId: 'msg1', attachmentId: 'expired-id', filename: 'file.pdf', mimeType: 'application/pdf' },
+        fakeGetAuth,
+      ),
+    ).rejects.toThrow('Attachment not found');
+  });
+
+  it('surfaces generic error from attachments.get', async () => {
+    mockAttachmentsGet.mockRejectedValue(new Error('Network error'));
+
+    await expect(
+      downloadAttachment(
+        { messageId: 'msg1', attachmentId: 'att1', filename: 'file.pdf', mimeType: 'application/pdf' },
+        fakeGetAuth,
+      ),
+    ).rejects.toThrow('Failed to download attachment');
+  });
+
+  it('throws when attachments.get returns no data', async () => {
+    mockAttachmentsGet.mockResolvedValue({ data: {} });
+
+    await expect(
+      downloadAttachment(
+        { messageId: 'msg1', attachmentId: 'att1', filename: 'file.pdf', mimeType: 'application/pdf' },
+        fakeGetAuth,
+      ),
+    ).rejects.toThrow('No attachment data returned');
+  });
+});
+
+describe('isAllowedAttachment', () => {
+  it('allows application/pdf directly', () => {
+    expect(isAllowedAttachment('application/pdf', 'file.pdf')).toBe(true);
+  });
+
+  it('allows application/octet-stream PDF via extension fallback', () => {
+    expect(isAllowedAttachment('application/octet-stream', 'invoice.pdf')).toBe(true);
+  });
+
+  it('allows absent MIME type with known extension', () => {
+    expect(isAllowedAttachment(undefined, 'photo.png')).toBe(true);
+  });
+
+  it('rejects explicit disallowed MIME type regardless of extension', () => {
+    expect(isAllowedAttachment('application/x-msdownload', 'file.pdf')).toBe(false);
+  });
+
+  it('rejects unknown extension with generic MIME type', () => {
+    expect(isAllowedAttachment('application/octet-stream', 'script.sh')).toBe(false);
+  });
+
+  it('allows when no MIME type and no extension', () => {
+    expect(isAllowedAttachment(undefined, 'attachment_download')).toBe(true);
   });
 });
 

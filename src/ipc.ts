@@ -2,8 +2,6 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { CronExpressionParser } from 'cron-parser';
-
 import {
   ASSISTANT_NAME,
   DATA_DIR,
@@ -20,6 +18,7 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { resolveGroupIpcPath } from './group-folder.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { parseCronNextSafe } from './task-scheduler.js';
 import { RegisteredGroup } from './types.js';
 
 /** Maximum IPC file size in bytes. Files larger than this are rejected and deleted. */
@@ -294,10 +293,7 @@ export async function processTaskIpc(
         let nextRun: string | null = null;
         if (scheduleType === 'cron') {
           try {
-            const interval = CronExpressionParser.parse(data.schedule_value, {
-              tz: TIMEZONE,
-            });
-            nextRun = interval.next().toISOString();
+            nextRun = parseCronNextSafe(data.schedule_value, TIMEZONE, new Date()).toISOString();
           } catch {
             logger.warn(
               { scheduleValue: data.schedule_value },
@@ -474,11 +470,7 @@ export async function processTaskIpc(
           };
           if (updatedTask.schedule_type === 'cron') {
             try {
-              const interval = CronExpressionParser.parse(
-                updatedTask.schedule_value,
-                { tz: TIMEZONE },
-              );
-              updates.next_run = interval.next().toISOString();
+              updates.next_run = parseCronNextSafe(updatedTask.schedule_value, TIMEZONE, new Date()).toISOString();
             } catch {
               logger.warn(
                 { taskId: data.taskId, value: updatedTask.schedule_value },

@@ -22,6 +22,41 @@ import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
+ * Wraps CronExpressionParser.next() with a DST-skip guard.
+ *
+ * cron-parser v5 has a bug: when `currentDate` falls in the window
+ * [last_scheduled_fire_time_pre_DST, DST_transition_UTC), `next()` skips
+ * the transition day and returns day+2 instead of day+1.
+ *
+ * Guard: if the computed gap exceeds 25 hours, scan forward in 1-hour steps
+ * until a closer occurrence is found. This corrects the spring-forward case
+ * without affecting weekly/monthly crons (which have no closer occurrence).
+ * For long-interval crons (e.g. monthly), the scan may run up to ~720
+ * iterations but finds no closer result and returns the original.
+ */
+export function parseCronNextSafe(scheduleValue: string, tz: string, currentDate: Date): Date {
+  const parse = (d: Date) =>
+    new Date(CronExpressionParser.parse(scheduleValue, { tz, currentDate: d }).next().toISOString()!);
+
+  let nextRun = parse(currentDate);
+  const gapMs = nextRun.getTime() - currentDate.getTime();
+  const oneHourMs = 60 * 60 * 1000;
+
+  if (gapMs > 25 * oneHourMs) {
+    let probe = new Date(currentDate.getTime() + oneHourMs);
+    while (probe.getTime() < nextRun.getTime()) {
+      const candidate = parse(probe);
+      if (candidate.getTime() < nextRun.getTime()) {
+        return candidate;
+      }
+      probe = new Date(probe.getTime() + oneHourMs);
+    }
+  }
+
+  return nextRun;
+}
+
+/**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
  * drift on interval-based tasks.
@@ -34,10 +69,7 @@ export function computeNextRun(task: ScheduledTask): string | null {
   const now = Date.now();
 
   if (task.schedule_type === 'cron') {
-    const interval = CronExpressionParser.parse(task.schedule_value, {
-      tz: TIMEZONE,
-    });
-    return interval.next().toISOString();
+    return parseCronNextSafe(task.schedule_value, TIMEZONE, new Date()).toISOString();
   }
 
   if (task.schedule_type === 'interval') {
@@ -99,6 +131,14 @@ async function runTask(
       result: null,
       error,
     });
+    try {
+      await deps.sendMessage(
+        task.chat_jid,
+        `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
+      );
+    } catch (notifyErr) {
+      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+    }
     return;
   }
   fs.mkdirSync(groupDir, { recursive: true });
@@ -114,6 +154,7 @@ async function runTask(
   );
 
   if (!group) {
+    const error = `Group not found: ${task.group_folder}`;
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder },
       'Group not found for task',
@@ -124,8 +165,16 @@ async function runTask(
       duration_ms: Date.now() - startTime,
       status: 'error',
       result: null,
-      error: `Group not found: ${task.group_folder}`,
+      error,
     });
+    try {
+      await deps.sendMessage(
+        task.chat_jid,
+        `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
+      );
+    } catch (notifyErr) {
+      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+    }
     return;
   }
 
@@ -231,6 +280,17 @@ async function runTask(
     result,
     error,
   });
+
+  if (error) {
+    try {
+      await deps.sendMessage(
+        task.chat_jid,
+        `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
+      );
+    } catch (notifyErr) {
+      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+    }
+  }
 
   const nextRun = computeNextRun(task);
   const resultSummary = error

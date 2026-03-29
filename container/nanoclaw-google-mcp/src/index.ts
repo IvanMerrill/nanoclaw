@@ -331,16 +331,24 @@ server.tool(
 
 server.tool(
   'download_attachment',
-  'Download an email attachment by message ID and attachment ID. Returns the file content as base64.',
+  'Download an email attachment by message ID and attachment ID. Saves to /workspace/group/attachments/ and returns the saved path.',
   {
     message_id: z.string().describe('The Gmail message ID'),
     attachment_id: z.string().describe('The attachment ID from the message metadata'),
     filename: z.string().optional().describe('Suggested filename for the attachment'),
+    mime_type: z.string().optional().describe('MIME type from the attachment metadata (pass through from read_email)'),
+    size: z.number().optional().describe('Attachment size in bytes from read_email metadata'),
   },
   async (args) =>
     gmailHandler('download_attachment', (getAuth) =>
       downloadAttachment(
-        { messageId: args.message_id, attachmentId: args.attachment_id, filename: args.filename },
+        {
+          messageId: args.message_id,
+          attachmentId: args.attachment_id,
+          filename: args.filename,
+          mimeType: args.mime_type,
+          size: args.size,
+        },
         getAuth,
       ),
     ),

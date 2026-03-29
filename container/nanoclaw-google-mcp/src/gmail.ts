@@ -415,6 +415,36 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/vnd.ms-excel',
 ]);
 
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  '.pdf':  'application/pdf',
+  '.txt':  'text/plain',
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png':  'image/png',
+  '.gif':  'image/gif',
+  '.webp': 'image/webp',
+  '.doc':  'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls':  'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+export function isAllowedAttachment(mimeType: string | undefined, filename: string): boolean {
+  if (mimeType && mimeType !== 'application/octet-stream') {
+    // Explicit non-generic MIME type: validate against allowlist
+    return ALLOWED_MIME_TYPES.has(mimeType);
+  }
+  // Generic or absent MIME type: fall back to filename extension
+  const ext = path.extname(filename).toLowerCase();
+  if (ext) {
+    const mapped = EXTENSION_MIME_MAP[ext];
+    return mapped !== undefined && ALLOWED_MIME_TYPES.has(mapped);
+  }
+  // No MIME type and no extension: allow (size check is the guard)
+  return true;
+}
+
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024; // 10MB
 
 export function sanitizeFilename(filename: string | undefined): string {
@@ -436,62 +466,70 @@ export function sanitizeFilename(filename: string | undefined): string {
 }
 
 export async function downloadAttachment(
-  args: { messageId: string; attachmentId: string; filename?: string },
+  args: {
+    messageId: string;
+    attachmentId: string;
+    filename?: string;
+    mimeType?: string;
+    size?: number;
+  },
   getAuth: GetAuth,
 ) {
   const auth = await getAuth();
   const gmail = google.gmail({ version: 'v1', auth });
 
-  // Get message to find attachment metadata
-  const msgRes = await gmail.users.messages.get({
-    userId: 'me',
-    id: args.messageId,
-    format: 'full',
-  });
+  // Sanitize filename first — needed for both MIME check and file write
+  const safeName = sanitizeFilename(args.filename);
 
-  const attachments = extractAttachments(
-    msgRes.data.payload as Parameters<typeof extractAttachments>[0],
-  );
-  const attachment = attachments.find((a) => a.id === args.attachmentId);
-
-  if (!attachment) {
-    throw new Error('Attachment not found');
-  }
-
-  // MIME type check
-  if (!ALLOWED_MIME_TYPES.has(attachment.mimeType)) {
+  // MIME type check (uses extension fallback for application/octet-stream)
+  if (!isAllowedAttachment(args.mimeType, safeName)) {
     throw new Error(
-      `MIME type "${attachment.mimeType}" is not allowed. Allowed types: ${[...ALLOWED_MIME_TYPES].join(', ')}`,
+      `MIME type "${args.mimeType}" is not allowed for "${safeName}". Allowed types: ${[...ALLOWED_MIME_TYPES].join(', ')}`,
     );
   }
 
-  // Size check (before downloading)
-  if (attachment.size > MAX_ATTACHMENT_SIZE) {
+  // Pre-download size check (uses size from readEmail metadata if provided)
+  if (args.size !== undefined && args.size > MAX_ATTACHMENT_SIZE) {
     throw new Error(
-      `Attachment size ${attachment.size} bytes exceeds maximum of ${MAX_ATTACHMENT_SIZE} bytes`,
+      `Attachment size ${args.size} bytes exceeds maximum of ${MAX_ATTACHMENT_SIZE} bytes`,
     );
   }
 
-  // Sanitize filename
-  const safeName = sanitizeFilename(args.filename ?? attachment.filename);
-
-  // Download attachment data
-  const attRes = await gmail.users.messages.attachments.get({
-    userId: 'me',
-    messageId: args.messageId,
-    id: args.attachmentId,
-  });
+  // Download attachment directly — no intermediate messages.get call.
+  // The attachmentId from readEmail is valid for attachments.get even though
+  // messages.get returns different attachmentId values on each call.
+  let attRes;
+  try {
+    attRes = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId: args.messageId,
+      id: args.attachmentId,
+    });
+  } catch (err) {
+    if ((err as any).code === 404) {
+      throw new Error('Attachment not found');
+    }
+    throw new Error(
+      `Failed to download attachment: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const data = attRes.data.data;
   if (!data) {
     throw new Error('No attachment data returned');
   }
 
-  // Write to fixed output directory
+  // Post-download size check (safety net regardless of whether size was provided)
+  const buffer = Buffer.from(data, 'base64url');
+  if (buffer.length > MAX_ATTACHMENT_SIZE) {
+    throw new Error(
+      `Attachment content too large: ${buffer.length} bytes exceeds maximum of ${MAX_ATTACHMENT_SIZE} bytes`,
+    );
+  }
+
   const outputDir = '/workspace/group/attachments';
   await fs.mkdir(outputDir, { recursive: true });
   const savedPath = path.join(outputDir, safeName);
-  const buffer = Buffer.from(data, 'base64url');
   await fs.writeFile(savedPath, buffer);
 
   return { savedPath };
