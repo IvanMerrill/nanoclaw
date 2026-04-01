@@ -7,7 +7,6 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_TIMEOUT,
   CONTAINER_MAX_OUTPUT_SIZE,
-  CREDENTIAL_PROXY_PORT,
   IPC_POLL_INTERVAL,
   IDLE_TIMEOUT,
   MAX_CONCURRENT_CONTAINERS,
@@ -43,10 +42,6 @@ describe('config defaults', () => {
 
   it('CONTAINER_MAX_OUTPUT_SIZE defaults to 10MB', () => {
     expect(CONTAINER_MAX_OUTPUT_SIZE).toBe(10485760);
-  });
-
-  it('CREDENTIAL_PROXY_PORT defaults to 3001', () => {
-    expect(CREDENTIAL_PROXY_PORT).toBe(3001);
   });
 
   it('IPC_POLL_INTERVAL is 1 second', () => {

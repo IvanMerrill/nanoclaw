@@ -8,8 +8,9 @@
  */
 import { request as httpRequest } from 'http';
 
-import { CREDENTIAL_PROXY_PORT } from './config.js';
 import { logger } from './logger.js';
+
+const CREDENTIAL_PROXY_PORT = Number(process.env.CREDENTIAL_PROXY_PORT) || 3001;
 
 export const INITIAL_DELAY_MS = 10_000;
 export const REPEAT_INTERVAL_MS = 60_000;
