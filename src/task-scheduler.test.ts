@@ -19,14 +19,18 @@ vi.mock('./container-runner.js', () => ({
 }));
 
 vi.mock('./group-folder.js', () => ({
-  resolveGroupFolderPath: (folder: string) => mockResolveGroupFolderPath(folder),
+  resolveGroupFolderPath: (folder: string) =>
+    mockResolveGroupFolderPath(folder),
 }));
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
   return {
     ...actual,
-    default: { ...actual, mkdirSync: (...args: unknown[]) => mockMkdirSync(...args) },
+    default: {
+      ...actual,
+      mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
+    },
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   };
 });
@@ -38,7 +42,8 @@ describe('task scheduler', () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mockResolveGroupFolderPath.mockImplementation((folder: string) => {
-      if (folder.includes('..')) throw new Error(`Path traversal detected: ${folder}`);
+      if (folder.includes('..'))
+        throw new Error(`Path traversal detected: ${folder}`);
       return `/tmp/test-groups/${folder}`;
     });
   });
@@ -153,37 +158,61 @@ describe('task scheduler', () => {
 
   describe('parseCronNextSafe', () => {
     it('returns correct next occurrence on a normal (non-DST) day', () => {
-      const result = parseCronNextSafe('0 8 * * *', 'Europe/Amsterdam', new Date('2026-03-27T07:03:00.000Z'));
+      const result = parseCronNextSafe(
+        '0 8 * * *',
+        'Europe/Amsterdam',
+        new Date('2026-03-27T07:03:00.000Z'),
+      );
       expect(result.toISOString()).toBe('2026-03-28T07:00:00.000Z');
     });
 
     it('returns the DST transition day when currentDate is in the cron-parser bug window', () => {
       const bugWindowTime = new Date('2026-03-28T07:04:20.000Z');
-      const result = parseCronNextSafe('0 8 * * *', 'Europe/Amsterdam', bugWindowTime);
+      const result = parseCronNextSafe(
+        '0 8 * * *',
+        'Europe/Amsterdam',
+        bugWindowTime,
+      );
       expect(result.toISOString()).toBe('2026-03-29T06:00:00.000Z');
     });
 
     it('returns the correct occurrence from the middle of the bug window', () => {
       const midWindow = new Date('2026-03-28T20:00:00.000Z');
-      const result = parseCronNextSafe('0 8 * * *', 'Europe/Amsterdam', midWindow);
+      const result = parseCronNextSafe(
+        '0 8 * * *',
+        'Europe/Amsterdam',
+        midWindow,
+      );
       expect(result.toISOString()).toBe('2026-03-29T06:00:00.000Z');
     });
 
     it('returns the correct occurrence from just before the DST transition', () => {
       const justBefore = new Date('2026-03-29T00:59:59.000Z');
-      const result = parseCronNextSafe('0 8 * * *', 'Europe/Amsterdam', justBefore);
+      const result = parseCronNextSafe(
+        '0 8 * * *',
+        'Europe/Amsterdam',
+        justBefore,
+      );
       expect(result.toISOString()).toBe('2026-03-29T06:00:00.000Z');
     });
 
     it('does not alter weekly cron results (gap > 25h is correct for weekly)', () => {
       const saturday = new Date('2026-03-28T08:00:00.000Z');
-      const result = parseCronNextSafe('0 9 * * 1', 'Europe/Amsterdam', saturday);
+      const result = parseCronNextSafe(
+        '0 9 * * 1',
+        'Europe/Amsterdam',
+        saturday,
+      );
       expect(result.toISOString()).toBe('2026-03-30T07:00:00.000Z');
     });
 
     it('handles fall-back DST (CEST→CET in October) without false trigger', () => {
       const preFallback = new Date('2026-10-25T07:04:00.000Z');
-      const result = parseCronNextSafe('0 8 * * *', 'Europe/Amsterdam', preFallback);
+      const result = parseCronNextSafe(
+        '0 8 * * *',
+        'Europe/Amsterdam',
+        preFallback,
+      );
       expect(result.toISOString()).toBe('2026-10-26T07:00:00.000Z');
     });
   });
@@ -259,13 +288,20 @@ describe('task scheduler', () => {
           notifyIdle: vi.fn(),
         } as any,
         onProcess: () => {},
-        sendMessage: sendMessage as unknown as (jid: string, text: string) => Promise<void>,
+        sendMessage: sendMessage as unknown as (
+          jid: string,
+          text: string,
+        ) => Promise<void>,
       };
     }
 
     it('sends a notification when the group folder is invalid (Path 1)', async () => {
       const sendMessage = vi.fn().mockResolvedValue(undefined);
-      createTask({ ...makeTask('path1-test'), group_folder: '../../outside', chat_jid: 'bad@g.us' });
+      createTask({
+        ...makeTask('path1-test'),
+        group_folder: '../../outside',
+        chat_jid: 'bad@g.us',
+      });
 
       startSchedulerLoop({
         registeredGroups: () => ({}),

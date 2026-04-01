@@ -293,7 +293,11 @@ export async function processTaskIpc(
         let nextRun: string | null = null;
         if (scheduleType === 'cron') {
           try {
-            nextRun = parseCronNextSafe(data.schedule_value, TIMEZONE, new Date()).toISOString();
+            nextRun = parseCronNextSafe(
+              data.schedule_value,
+              TIMEZONE,
+              new Date(),
+            ).toISOString();
           } catch {
             logger.warn(
               { scheduleValue: data.schedule_value },
@@ -472,7 +476,11 @@ export async function processTaskIpc(
           };
           if (updatedTask.schedule_type === 'cron') {
             try {
-              updates.next_run = parseCronNextSafe(updatedTask.schedule_value, TIMEZONE, new Date()).toISOString();
+              updates.next_run = parseCronNextSafe(
+                updatedTask.schedule_value,
+                TIMEZONE,
+                new Date(),
+              ).toISOString();
             } catch {
               logger.warn(
                 { taskId: data.taskId, value: updatedTask.schedule_value },

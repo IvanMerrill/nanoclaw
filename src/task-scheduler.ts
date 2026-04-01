@@ -34,9 +34,17 @@ import { RegisteredGroup, ScheduledTask } from './types.js';
  * For long-interval crons (e.g. monthly), the scan may run up to ~720
  * iterations but finds no closer result and returns the original.
  */
-export function parseCronNextSafe(scheduleValue: string, tz: string, currentDate: Date): Date {
+export function parseCronNextSafe(
+  scheduleValue: string,
+  tz: string,
+  currentDate: Date,
+): Date {
   const parse = (d: Date) =>
-    new Date(CronExpressionParser.parse(scheduleValue, { tz, currentDate: d }).next().toISOString()!);
+    new Date(
+      CronExpressionParser.parse(scheduleValue, { tz, currentDate: d })
+        .next()
+        .toISOString()!,
+    );
 
   let nextRun = parse(currentDate);
   const gapMs = nextRun.getTime() - currentDate.getTime();
@@ -69,7 +77,11 @@ export function computeNextRun(task: ScheduledTask): string | null {
   const now = Date.now();
 
   if (task.schedule_type === 'cron') {
-    return parseCronNextSafe(task.schedule_value, TIMEZONE, new Date()).toISOString();
+    return parseCronNextSafe(
+      task.schedule_value,
+      TIMEZONE,
+      new Date(),
+    ).toISOString();
   }
 
   if (task.schedule_type === 'interval') {
@@ -137,7 +149,10 @@ async function runTask(
         `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
       );
     } catch (notifyErr) {
-      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+      logger.error(
+        { taskId: task.id, notifyErr },
+        'Failed to send task error notification',
+      );
     }
     return;
   }
@@ -173,7 +188,10 @@ async function runTask(
         `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
       );
     } catch (notifyErr) {
-      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+      logger.error(
+        { taskId: task.id, notifyErr },
+        'Failed to send task error notification',
+      );
     }
     return;
   }
@@ -290,7 +308,10 @@ async function runTask(
         `⚠️ Scheduled task failed\n\n${task.prompt.slice(0, 80)}...\nError: ${error.slice(0, 300)}`,
       );
     } catch (notifyErr) {
-      logger.error({ taskId: task.id, notifyErr }, 'Failed to send task error notification');
+      logger.error(
+        { taskId: task.id, notifyErr },
+        'Failed to send task error notification',
+      );
     }
   }
 
