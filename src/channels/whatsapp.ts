@@ -78,7 +78,11 @@ const logger = Object.assign({}, baseLogger, {
   level: 'silent' as const,
   trace: baseLogger.debug,
   child: () => logger,
-}) as typeof baseLogger & { level: string; trace: typeof baseLogger.debug; child: () => typeof logger };
+}) as typeof baseLogger & {
+  level: string;
+  trace: typeof baseLogger.debug;
+  child: () => typeof logger;
+};
 import {
   Channel,
   OnInboundMessage,
