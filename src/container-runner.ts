@@ -69,7 +69,11 @@ function buildVolumeMounts(
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
-    // Project root is read-only — agent code should not be modified
+    // Main gets the project root read-only. Writable paths the agent needs
+    // (store, group folder, IPC, .claude/) are mounted separately below.
+    // Read-only prevents the agent from modifying host application code
+    // (src/, dist/, package.json, etc.) which would bypass the sandbox
+    // entirely on next restart.
     mounts.push({
       hostPath: projectRoot,
       containerPath: '/workspace/project',
@@ -96,6 +100,15 @@ function buildVolumeMounts(
         readonly: false,
       });
     }
+
+    // Main gets writable access to the store (SQLite DB) so it can
+    // query and write to the database directly.
+    const storeDir = path.join(projectRoot, 'store');
+    mounts.push({
+      hostPath: storeDir,
+      containerPath: '/workspace/project/store',
+      readonly: false,
+    });
 
     // Global memory directory (writable for main)
     const globalDir = path.join(GROUPS_DIR, 'global');
