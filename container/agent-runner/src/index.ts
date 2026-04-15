@@ -473,11 +473,18 @@ async function runQuery(
   // User overlay provides personality and personal preferences (gitignored, local only).
   const systemPromptParts: string[] = [];
 
-  const templatePath = containerInput.isMain
-    ? '/workspace/templates/main.md'
-    : '/workspace/templates/global.md';
-  if (fs.existsSync(templatePath)) {
-    systemPromptParts.push(fs.readFileSync(templatePath, 'utf-8'));
+  // Load base template for all groups
+  const basePath = '/workspace/templates/base.md';
+  if (fs.existsSync(basePath)) {
+    systemPromptParts.push(fs.readFileSync(basePath, 'utf-8'));
+  }
+
+  // Load main-channel extras (admin pointer, elevated privileges)
+  if (containerInput.isMain) {
+    const mainExtraPath = '/workspace/templates/main-extra.md';
+    if (fs.existsSync(mainExtraPath)) {
+      systemPromptParts.push(fs.readFileSync(mainExtraPath, 'utf-8'));
+    }
   }
 
   // Load user's global overlay (personality, preferences) for non-main groups.
