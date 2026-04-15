@@ -255,7 +255,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
-function sanitizeFilename(summary: string): string {
+export function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -263,17 +263,17 @@ function sanitizeFilename(summary: string): string {
     .slice(0, 50);
 }
 
-function generateFallbackName(): string {
+export function generateFallbackName(): string {
   const time = new Date();
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
 
-interface ParsedMessage {
+export interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-function parseTranscript(content: string): ParsedMessage[] {
+export function parseTranscript(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
 
   for (const line of content.split('\n')) {
@@ -301,7 +301,7 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
-function formatTranscriptMarkdown(
+export function formatTranscriptMarkdown(
   messages: ParsedMessage[],
   title?: string | null,
   assistantName?: string,
@@ -335,6 +335,62 @@ function formatTranscriptMarkdown(
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Archive the current session transcript directly from the JSONL file.
+ * Used before /clear, which discards context without triggering the PreCompact hook.
+ */
+export function archiveCurrentSession(
+  sessionId: string | undefined,
+  assistantName?: string,
+): void {
+  if (!sessionId) {
+    log('archiveCurrentSession: no sessionId, skipping');
+    return;
+  }
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sessionId)) {
+    log(`archiveCurrentSession: sessionId does not match UUID format, skipping`);
+    return;
+  }
+
+  const projectDir = '/home/node/.claude/projects/-workspace-group';
+  const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+
+  if (!fs.existsSync(transcriptPath)) {
+    log(`archiveCurrentSession: transcript not found at ${transcriptPath}`);
+    return;
+  }
+
+  try {
+    const content = fs.readFileSync(transcriptPath, 'utf-8');
+    const messages = parseTranscript(content);
+
+    if (messages.length === 0) {
+      log('archiveCurrentSession: no messages to archive');
+      return;
+    }
+
+    const summary = getSessionSummary(sessionId, transcriptPath);
+    const name = summary ? sanitizeFilename(summary) : generateFallbackName();
+
+    const conversationsDir = '/workspace/group/conversations';
+    fs.mkdirSync(conversationsDir, { recursive: true });
+
+    const date = new Date().toISOString().split('T')[0];
+    const filename = `${date}-${name}.md`;
+    const filePath = path.join(conversationsDir, filename);
+
+    const markdown = formatTranscriptMarkdown(messages, summary, assistantName);
+    fs.writeFileSync(filePath, markdown);
+
+    log(`Archived conversation before /clear to ${filePath}`);
+  } catch (err) {
+    log(
+      `archiveCurrentSession failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
@@ -725,12 +781,17 @@ async function main(): Promise<void> {
   // --- Slash command handling ---
   // Only known session slash commands are handled here. This prevents
   // accidental interception of user prompts that happen to start with '/'.
-  const KNOWN_SESSION_COMMANDS = new Set(['/compact']);
+  const KNOWN_SESSION_COMMANDS = new Set(['/compact', '/clear']);
   const trimmedPrompt = prompt.trim();
   const isSessionSlashCommand = KNOWN_SESSION_COMMANDS.has(trimmedPrompt);
 
   if (isSessionSlashCommand) {
     log(`Handling session command: ${trimmedPrompt}`);
+    // /clear: archive current session before context is discarded
+    // (compact_boundary will not be emitted for /clear; that is expected.)
+    if (trimmedPrompt === '/clear') {
+      archiveCurrentSession(sessionId, containerInput.assistantName);
+    }
     let slashSessionId: string | undefined;
     let compactBoundarySeen = false;
     let hadError = false;
@@ -784,7 +845,11 @@ async function main(): Promise<void> {
           } else {
             writeOutput({
               status: 'success',
-              result: textResult || 'Conversation compacted.',
+              result:
+                textResult ||
+                (trimmedPrompt === '/clear'
+                  ? 'Conversation archived.'
+                  : 'Conversation compacted.'),
               newSessionId: slashSessionId,
             });
           }
@@ -800,8 +865,8 @@ async function main(): Promise<void> {
 
     log(`Slash command done. compactBoundarySeen=${compactBoundarySeen}, hadError=${hadError}`);
 
-    // Warn if compact_boundary was never observed — compaction may not have occurred
-    if (!hadError && !compactBoundarySeen) {
+    // compact_boundary is only emitted for /compact, not /clear — only warn for /compact
+    if (!hadError && !compactBoundarySeen && trimmedPrompt === '/compact') {
       log('WARNING: compact_boundary was not observed. Compaction may not have completed.');
     }
 
@@ -811,7 +876,9 @@ async function main(): Promise<void> {
         status: 'success',
         result: compactBoundarySeen
           ? 'Conversation compacted.'
-          : 'Compaction requested but compact_boundary was not observed.',
+          : trimmedPrompt === '/clear'
+            ? 'Conversation archived.'
+            : 'Compaction requested but compact_boundary was not observed.',
         newSessionId: slashSessionId,
       });
     } else if (!hadError) {
@@ -916,4 +983,8 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main();
+// Only run main when this file is the entry point, not when imported by tests
+const isEntrypoint = import.meta.url === new URL(process.argv[1], 'file:').href;
+if (isEntrypoint) {
+  main();
+}
