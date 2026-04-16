@@ -10,8 +10,9 @@ import { isValidTimezone } from './timezone.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
-  'TZ',
   'ONECLI_URL',
+  'ONECLI_API_KEY',
+  'TZ',
 ]);
 
 export const ASSISTANT_NAME =
@@ -58,6 +59,8 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
   10,
 );
 export const ONECLI_URL = process.env.ONECLI_URL || envConfig.ONECLI_URL;
+export const ONECLI_API_KEY =
+  process.env.ONECLI_API_KEY || envConfig.ONECLI_API_KEY;
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
