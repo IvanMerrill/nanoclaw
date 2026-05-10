@@ -66,7 +66,7 @@ export async function getToken(
   }
 
   const cached = tokenCache[scope];
-  if (cached && cached.expires_at > Date.now() / 1000 + 30) {
+  if (cached && cached.expires_at > Date.now() + 30_000) {
     return { access_token: cached.access_token, expires_at: cached.expires_at };
   }
 
