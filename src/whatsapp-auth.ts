@@ -23,11 +23,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 
 // Create proxy agent from environment if available
-const proxyUrl =
-  process.env.https_proxy ||
-  process.env.HTTPS_PROXY ||
-  process.env.http_proxy ||
-  process.env.HTTP_PROXY;
+const proxyUrl = process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY;
 const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
 /**
@@ -36,24 +32,20 @@ const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
  */
 function fetchVersionViaProxy(): Promise<[number, number, number] | undefined> {
   return new Promise((resolve) => {
-    const req = https.request(
-      'https://web.whatsapp.com/sw.js',
-      { agent: proxyAgent },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => {
-          data += chunk.toString();
-        });
-        res.on('end', () => {
-          const match = data.match(/client_revision[^0-9]*(\d+)/);
-          if (match) {
-            resolve([2, 3000, parseInt(match[1], 10)]);
-          } else {
-            resolve(undefined);
-          }
-        });
-      },
-    );
+    const req = https.request('https://web.whatsapp.com/sw.js', { agent: proxyAgent }, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => {
+        data += chunk.toString();
+      });
+      res.on('end', () => {
+        const match = data.match(/client_revision[^0-9]*(\d+)/);
+        if (match) {
+          resolve([2, 3000, parseInt(match[1], 10)]);
+        } else {
+          resolve(undefined);
+        }
+      });
+    });
     req.on('error', () => resolve(undefined));
     req.setTimeout(5000, () => {
       req.destroy();
@@ -98,18 +90,13 @@ function askQuestion(prompt: string): Promise<string> {
   });
 }
 
-async function connectSocket(
-  phoneNumber?: string,
-  isReconnect = false,
-): Promise<void> {
+async function connectSocket(phoneNumber?: string, isReconnect = false): Promise<void> {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
   if (state.creds.registered && !isReconnect) {
     fs.writeFileSync(STATUS_FILE, 'already_authenticated');
     console.log('✓ Already authenticated with WhatsApp');
-    console.log(
-      '  To re-authenticate, delete the store/auth folder and run again.',
-    );
+    console.log('  To re-authenticate, delete the store/auth folder and run again.');
     process.exit(0);
   }
 
@@ -213,9 +200,7 @@ async function authenticate(): Promise<void> {
 
   let phoneNumber = phoneArg;
   if (usePairingCode && !phoneNumber) {
-    phoneNumber = await askQuestion(
-      'Enter your phone number (with country code, no + or spaces, e.g. 14155551234): ',
-    );
+    phoneNumber = await askQuestion('Enter your phone number (with country code, no + or spaces, e.g. 14155551234): ');
   }
 
   console.log('Starting WhatsApp authentication...\n');
