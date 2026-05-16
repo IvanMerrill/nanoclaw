@@ -8,7 +8,7 @@ import {
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
-import type { ContainerConfigRow } from '../../types.js';
+import type { AgentDefinition, ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 /** Deserialize JSON columns for display. */
@@ -209,6 +209,77 @@ registerResource({
         updateContainerConfigJson(id, 'mcp_servers', servers);
 
         return { removed: name };
+      },
+    },
+    'config agents list': {
+      access: 'approval',
+      description: 'List all named subagents defined for a group. Use --id <group-id>.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+        return { agents: JSON.parse(row.agents) as Record<string, AgentDefinition> };
+      },
+    },
+    'config agents add': {
+      access: 'approval',
+      description:
+        'Define or replace a named subagent for a group. Direct DB write; run `ncl groups restart` for changes to take effect. ' +
+        'Use --id <group-id> --name <subagent-name> --description <desc> --prompt-file <path> --tools <comma-sep> [--model <model>].',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const name = args.name as string;
+        if (!name) throw new Error('--name is required');
+        const description = args.description as string;
+        if (!description) throw new Error('--description is required');
+        const promptFile = args['prompt-file'] as string | undefined;
+        if (!promptFile) {
+          throw new Error('--prompt-file is required (subagent prompts are multi-line; no inline --prompt)');
+        }
+        const fs = await import('fs');
+        if (!fs.existsSync(promptFile)) throw new Error(`Prompt file not found: ${promptFile}`);
+        const prompt = fs.readFileSync(promptFile, 'utf-8');
+        const toolsArg = args.tools as string | undefined;
+        if (!toolsArg) throw new Error('--tools is required (comma-separated list)');
+        const tools = toolsArg
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean);
+        if (tools.length === 0) throw new Error('--tools must contain at least one tool');
+        const model = args.model as string | undefined;
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const agents = JSON.parse(row.agents) as Record<string, AgentDefinition>;
+        agents[name] = { description, prompt, tools, ...(model ? { model } : {}) };
+        updateContainerConfigJson(id, 'agents', agents);
+
+        return { added: name, note: `Run \`ncl groups restart --id ${id}\` to apply.` };
+      },
+    },
+    'config agents remove': {
+      access: 'approval',
+      description:
+        'Remove a named subagent from a group. Direct DB write; run `ncl groups restart` for changes to take effect. ' +
+        'Use --id <group-id> --name <subagent-name>.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const name = args.name as string;
+        if (!name) throw new Error('--name is required');
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const agents = JSON.parse(row.agents) as Record<string, AgentDefinition>;
+        if (!(name in agents)) throw new Error(`Subagent "${name}" not found`);
+        delete agents[name];
+        updateContainerConfigJson(id, 'agents', agents);
+
+        return { removed: name, note: `Run \`ncl groups restart --id ${id}\` to apply.` };
       },
     },
     'config add-package': {
