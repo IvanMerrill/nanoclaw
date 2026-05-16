@@ -117,4 +117,70 @@ export const addMcpServer: McpToolDefinition = {
   },
 };
 
-registerTools([installPackages, addMcpServer]);
+export const defineSubagent: McpToolDefinition = {
+  tool: {
+    name: 'define_subagent',
+    description:
+      'Define a named restricted subagent for THIS agent group. The subagent runs with ONLY the listed tools — a hard SDK-enforced allowlist. Use for tasks that need a tighter tool set than your full allowlist (e.g. read-only email triage). Fire-and-forget; takes effect after the container restarts (automatic).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Subagent identifier (unique within the group). Used as Task tool subagent_type.' },
+        description: { type: 'string', description: 'When-to-use description shown to the parent agent.' },
+        prompt: { type: 'string', description: 'System prompt for the subagent.' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of tool names this subagent can call.' },
+        model: { type: 'string', description: 'Optional model override (e.g. "sonnet").' },
+      },
+      required: ['name', 'description', 'prompt', 'tools'],
+    },
+  },
+  async handler(args) {
+    const name = args.name as string;
+    const description = args.description as string;
+    const prompt = args.prompt as string;
+    const tools = (args.tools as string[]) || [];
+    const model = args.model as string | undefined;
+    if (!name || !description || !prompt) return err('name, description, and prompt are required');
+    if (!Array.isArray(tools) || tools.length === 0) return err('tools must be a non-empty array');
+
+    const requestId = generateId();
+    writeMessageOut({
+      id: requestId,
+      kind: 'system',
+      content: JSON.stringify({ action: 'define_subagent', name, description, prompt, tools, model }),
+    });
+
+    log(`define_subagent: ${requestId} → "${name}" (tools=[${tools.join(',')}])`);
+    return ok(`Subagent "${name}" defined. The container will restart to pick up the change; you'll be notified when ready.`);
+  },
+};
+
+export const removeSubagent: McpToolDefinition = {
+  tool: {
+    name: 'remove_subagent',
+    description: 'Remove a named subagent from THIS agent group. Fire-and-forget; takes effect after the container restarts (automatic).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Subagent identifier to remove.' },
+      },
+      required: ['name'],
+    },
+  },
+  async handler(args) {
+    const name = args.name as string;
+    if (!name) return err('name is required');
+
+    const requestId = generateId();
+    writeMessageOut({
+      id: requestId,
+      kind: 'system',
+      content: JSON.stringify({ action: 'remove_subagent', name }),
+    });
+
+    log(`remove_subagent: ${requestId} → "${name}"`);
+    return ok(`Subagent "${name}" removal requested. The container will restart to pick up the change.`);
+  },
+};
+
+registerTools([installPackages, addMcpServer, defineSubagent, removeSubagent]);
