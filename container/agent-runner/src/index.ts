@@ -27,6 +27,7 @@ import { fileURLToPath } from 'url';
 
 import { loadConfig } from './config.js';
 import { buildSystemPromptAddendum } from './destinations.js';
+import { validateSubagentsAtStartup } from './subagent-validation.js';
 // Providers barrel — each enabled provider self-registers on import.
 // Provider skills append imports to providers/index.ts.
 import './providers/index.js';
@@ -84,6 +85,14 @@ async function main(): Promise<void> {
   for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
     mcpServers[name] = serverConfig;
     log(`Additional MCP server: ${name} (${serverConfig.command})`);
+  }
+
+  // Validate subagent tool allowlists against live MCP server inventories.
+  // The SDK silently drops unknown tool names; an unmatched name → empty
+  // toolset → subagent hallucinates plausible output instead of erroring.
+  // WARN-only; doesn't block startup.
+  if (Object.keys(config.agents).length > 0) {
+    await validateSubagentsAtStartup(config.agents, config.mcpServers);
   }
 
   const provider = createProvider(providerName, {

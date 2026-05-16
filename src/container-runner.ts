@@ -159,10 +159,15 @@ async function spawnContainer(session: Session): Promise<void> {
   activeContainers.set(session.id, { process: container, containerName });
   markContainerRunning(session.id);
 
-  // Log stderr
+  // Log stderr. Promote lines that self-identify as WARN/ERROR so they
+  // reach the default log level — otherwise container-side warnings (e.g.
+  // subagent-validation) get swallowed at the host's INFO threshold.
   container.stderr?.on('data', (data) => {
     for (const line of data.toString().trim().split('\n')) {
-      if (line) log.debug(line, { container: agentGroup.folder });
+      if (!line) continue;
+      if (/\bWARN\b/.test(line)) log.warn(line, { container: agentGroup.folder });
+      else if (/\bERROR\b/i.test(line)) log.error(line, { container: agentGroup.folder });
+      else log.debug(line, { container: agentGroup.folder });
     }
   });
 
