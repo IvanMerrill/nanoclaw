@@ -9,6 +9,13 @@ import fs from 'fs';
 
 const CONFIG_PATH = '/workspace/agent/container.json';
 
+export interface AgentDefinition {
+  description: string;
+  prompt: string;
+  tools: string[];
+  model?: string;
+}
+
 export interface RunnerConfig {
   provider: string;
   assistantName: string;
@@ -16,6 +23,7 @@ export interface RunnerConfig {
   agentGroupId: string;
   maxMessagesPerPrompt: number;
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+  agents: Record<string, AgentDefinition>;
   model?: string;
   effort?: string;
 }
@@ -28,28 +36,31 @@ let _config: RunnerConfig | null = null;
  * Load config from container.json. Called once at startup.
  * Falls back to sensible defaults for any missing field.
  */
-export function loadConfig(): RunnerConfig {
-  if (_config) return _config;
+export function loadConfig(configPath: string = CONFIG_PATH): RunnerConfig {
+  const useCache = configPath === CONFIG_PATH;
+  if (useCache && _config) return _config;
 
   let raw: Record<string, unknown> = {};
   try {
-    raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   } catch {
-    console.error(`[config] Failed to read ${CONFIG_PATH}, using defaults`);
+    console.error(`[config] Failed to read ${configPath}, using defaults`);
   }
 
-  _config = {
+  const loaded: RunnerConfig = {
     provider: (raw.provider as string) || 'claude',
     assistantName: (raw.assistantName as string) || '',
     groupName: (raw.groupName as string) || '',
     agentGroupId: (raw.agentGroupId as string) || '',
     maxMessagesPerPrompt: (raw.maxMessagesPerPrompt as number) || DEFAULT_MAX_MESSAGES,
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
+    agents: (raw.agents as RunnerConfig['agents']) || {},
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
   };
 
-  return _config;
+  if (useCache) _config = loaded;
+  return loaded;
 }
 
 /** Get the loaded config. Throws if loadConfig() hasn't been called. */

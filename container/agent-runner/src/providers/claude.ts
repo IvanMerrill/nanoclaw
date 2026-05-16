@@ -3,6 +3,7 @@ import path from 'path';
 
 import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 
+import type { AgentDefinition } from '../config.js';
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import { registerProvider } from './provider-registry.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
@@ -255,6 +256,7 @@ export class ClaudeProvider implements AgentProvider {
 
   private assistantName?: string;
   private mcpServers: Record<string, McpServerConfig>;
+  private agents: Record<string, AgentDefinition>;
   private env: Record<string, string | undefined>;
   private additionalDirectories?: string[];
   private model?: string;
@@ -263,6 +265,7 @@ export class ClaudeProvider implements AgentProvider {
   constructor(options: ProviderOptions = {}) {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
+    this.agents = options.agents ?? {};
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
     this.effort = options.effort;
@@ -304,6 +307,7 @@ export class ClaudeProvider implements AgentProvider {
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
         mcpServers: this.mcpServers,
+        agents: this.agents,
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],
           PostToolUse: [{ hooks: [postToolUseHook] }],

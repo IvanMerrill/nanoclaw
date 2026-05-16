@@ -1,3 +1,5 @@
+import type { AgentDefinition } from '../config.js';
+
 export interface AgentProvider {
   /**
    * True if the provider's underlying SDK handles slash commands natively and
@@ -35,6 +37,12 @@ export interface ProviderOptions {
    * through to the underlying SDK. If omitted, the SDK default is used.
    */
   effort?: string;
+  /**
+   * Named restricted subagents. Each entry defines a Task subagent_type with
+   * a hard SDK-enforced tool allowlist. Stored verbatim and forwarded to
+   * `sdkQuery({ options: { agents } })`.
+   */
+  agents?: Record<string, AgentDefinition>;
 }
 
 export interface QueryInput {
