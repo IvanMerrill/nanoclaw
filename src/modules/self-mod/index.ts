@@ -21,10 +21,13 @@
 import { registerDeliveryAction } from '../../delivery.js';
 import { registerApprovalHandler } from '../approvals/index.js';
 import { applyAddMcpServer, applyInstallPackages } from './apply.js';
-import { handleAddMcpServer, handleInstallPackages } from './request.js';
+import { handleAddMcpServer, handleDefineSubagent, handleInstallPackages, handleRemoveSubagent } from './request.js';
 
 registerDeliveryAction('install_packages', handleInstallPackages);
 registerDeliveryAction('add_mcp_server', handleAddMcpServer);
+// Subagent actions bypass approval — see request.ts handlers for rationale.
+registerDeliveryAction('define_subagent', handleDefineSubagent);
+registerDeliveryAction('remove_subagent', handleRemoveSubagent);
 
 registerApprovalHandler('install_packages', applyInstallPackages);
 registerApprovalHandler('add_mcp_server', applyAddMcpServer);

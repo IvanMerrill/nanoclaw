@@ -17,6 +17,7 @@ import { getSession } from '../../db/sessions.js';
 import type { McpServerConfig } from '../../container-config.js';
 import { log } from '../../log.js';
 import { writeSessionMessage } from '../../session-manager.js';
+import type { AgentDefinition, Session } from '../../types.js';
 import type { ApprovalHandler } from '../approvals/index.js';
 
 export const applyInstallPackages: ApprovalHandler = async ({ session, payload, userId, notify }) => {
@@ -124,3 +125,84 @@ export const applyAddMcpServer: ApprovalHandler = async ({ session, payload, use
   });
   log.info('MCP server add approved', { agentGroupId: session.agent_group_id, userId });
 };
+
+/** Direct apply (no approval gate). See request.ts for the rationale. */
+export async function applyDefineSubagent(
+  payload: { name: string; description: string; prompt: string; tools: string[]; model?: string },
+  session: Session,
+): Promise<void> {
+  const agentGroup = getAgentGroup(session.agent_group_id);
+  if (!agentGroup) {
+    log.error('define_subagent: agent group missing', { agentGroupId: session.agent_group_id });
+    return;
+  }
+  const configRow = getContainerConfig(agentGroup.id);
+  if (!configRow) {
+    log.error('define_subagent: container config missing', { agentGroupId: agentGroup.id });
+    return;
+  }
+
+  const agents = JSON.parse(configRow.agents) as Record<string, AgentDefinition>;
+  agents[payload.name] = {
+    description: payload.description,
+    prompt: payload.prompt,
+    tools: payload.tools,
+    ...(payload.model ? { model: payload.model } : {}),
+  };
+  updateContainerConfigJson(agentGroup.id, 'agents', agents);
+
+  writeSessionMessage(session.agent_group_id, session.id, {
+    id: `subagent-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({
+      text: `Subagent "${payload.name}" defined. You can now invoke it via the Task tool with subagent_type: "${payload.name}".`,
+      sender: 'system',
+      senderId: 'system',
+    }),
+    onWake: 1,
+  });
+  killContainer(session.id, 'subagent defined', () => {
+    const s = getSession(session.id);
+    if (s) wakeContainer(s);
+  });
+  log.info('Subagent defined', { agentGroupId: agentGroup.id, name: payload.name });
+}
+
+export async function applyRemoveSubagent(payload: { name: string }, session: Session): Promise<void> {
+  const agentGroup = getAgentGroup(session.agent_group_id);
+  if (!agentGroup) return;
+  const configRow = getContainerConfig(agentGroup.id);
+  if (!configRow) return;
+
+  const agents = JSON.parse(configRow.agents) as Record<string, AgentDefinition>;
+  if (!(payload.name in agents)) {
+    log.info('remove_subagent: no-op (name not found)', { agentGroupId: agentGroup.id, name: payload.name });
+    return;
+  }
+  delete agents[payload.name];
+  updateContainerConfigJson(agentGroup.id, 'agents', agents);
+
+  writeSessionMessage(session.agent_group_id, session.id, {
+    id: `subagent-note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: session.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: JSON.stringify({
+      text: `Subagent "${payload.name}" removed.`,
+      sender: 'system',
+      senderId: 'system',
+    }),
+    onWake: 1,
+  });
+  killContainer(session.id, 'subagent removed', () => {
+    const s = getSession(session.id);
+    if (s) wakeContainer(s);
+  });
+  log.info('Subagent removed', { agentGroupId: agentGroup.id, name: payload.name });
+}

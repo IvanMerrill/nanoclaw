@@ -16,6 +16,7 @@ import { getAgentGroup } from '../../db/agent-groups.js';
 import { log } from '../../log.js';
 import type { Session } from '../../types.js';
 import { notifyAgent, requestApproval } from '../approvals/index.js';
+import { applyDefineSubagent, applyRemoveSubagent } from './apply.js';
 
 export async function handleInstallPackages(content: Record<string, unknown>, session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
@@ -88,4 +89,50 @@ export async function handleAddMcpServer(content: Record<string, unknown>, sessi
     title: 'Add MCP Request',
     question: `Agent "${agentGroup.name}" is attempting to add a new MCP server:\n${serverName} (${command})`,
   });
+}
+
+/**
+ * Subagent definition: deliberately bypasses the approval gate that
+ * install_packages / add_mcp_server use. Reason: defining a subagent can only
+ * RESTRICT capability (the subagent runs with a strict subset of the parent's
+ * allowlist). It cannot introduce new tools, run new code, or expand the agent
+ * group's reach. The threat model that justifies approval for the other
+ * self-mod actions does not apply here.
+ */
+export async function handleDefineSubagent(content: Record<string, unknown>, session: Session): Promise<void> {
+  const agentGroup = getAgentGroup(session.agent_group_id);
+  if (!agentGroup) {
+    notifyAgent(session, 'define_subagent failed: agent group not found.');
+    return;
+  }
+  const name = content.name as string;
+  const description = content.description as string;
+  const prompt = content.prompt as string;
+  const tools = (content.tools as string[]) || [];
+  const model = content.model as string | undefined;
+  if (!name || !description || !prompt) {
+    notifyAgent(session, 'define_subagent failed: name, description, and prompt are required.');
+    return;
+  }
+  if (!Array.isArray(tools) || tools.length === 0) {
+    notifyAgent(session, 'define_subagent failed: tools must be a non-empty array.');
+    return;
+  }
+  log.info('define_subagent: no-approval direct apply', { agentGroupId: agentGroup.id, name });
+  await applyDefineSubagent({ name, description, prompt, tools, model }, session);
+}
+
+export async function handleRemoveSubagent(content: Record<string, unknown>, session: Session): Promise<void> {
+  const agentGroup = getAgentGroup(session.agent_group_id);
+  if (!agentGroup) {
+    notifyAgent(session, 'remove_subagent failed: agent group not found.');
+    return;
+  }
+  const name = content.name as string;
+  if (!name) {
+    notifyAgent(session, 'remove_subagent failed: name is required.');
+    return;
+  }
+  log.info('remove_subagent: no-approval direct apply', { agentGroupId: agentGroup.id, name });
+  await applyRemoveSubagent({ name }, session);
 }
