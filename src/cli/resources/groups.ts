@@ -234,7 +234,8 @@ registerResource({
         if (!name) throw new Error('--name is required');
         const description = args.description as string;
         if (!description) throw new Error('--description is required');
-        const promptFile = args['prompt-file'] as string | undefined;
+        // CLI normalization converts --prompt-file → prompt_file before reaching here.
+        const promptFile = args.prompt_file as string | undefined;
         if (!promptFile) {
           throw new Error('--prompt-file is required (subagent prompts are multi-line; no inline --prompt)');
         }

@@ -83,7 +83,7 @@ describe('ncl groups config agents add', () => {
       id: 'ag-1',
       name: 'email-classifier',
       description: 'Read-only triage',
-      'prompt-file': promptPath,
+      prompt_file: promptPath,
       tools: 'mcp__google__search_emails,mcp__google__read_email',
     });
     const row = getContainerConfig('ag-1')!;
@@ -102,7 +102,7 @@ describe('ncl groups config agents add', () => {
       id: 'ag-1',
       name: 'x',
       description: 'd',
-      'prompt-file': promptPath,
+      prompt_file: promptPath,
       tools: 't',
       model: 'sonnet',
     });
@@ -112,7 +112,7 @@ describe('ncl groups config agents add', () => {
 
   it('throws when --id is missing', async () => {
     const run = command('groups-config-agents-add');
-    await expect(run({ name: 'x', description: 'd', 'prompt-file': promptPath, tools: 't' })).rejects.toThrow(
+    await expect(run({ name: 'x', description: 'd', prompt_file: promptPath, tools: 't' })).rejects.toThrow(
       /--id is required/,
     );
   });
@@ -120,7 +120,7 @@ describe('ncl groups config agents add', () => {
   it('throws when --name is missing', async () => {
     seedGroup('ag-1');
     const run = command('groups-config-agents-add');
-    await expect(run({ id: 'ag-1', description: 'd', 'prompt-file': promptPath, tools: 't' })).rejects.toThrow(
+    await expect(run({ id: 'ag-1', description: 'd', prompt_file: promptPath, tools: 't' })).rejects.toThrow(
       /--name is required/,
     );
   });
@@ -128,7 +128,7 @@ describe('ncl groups config agents add', () => {
   it('throws when --description is missing', async () => {
     seedGroup('ag-1');
     const run = command('groups-config-agents-add');
-    await expect(run({ id: 'ag-1', name: 'x', 'prompt-file': promptPath, tools: 't' })).rejects.toThrow(
+    await expect(run({ id: 'ag-1', name: 'x', prompt_file: promptPath, tools: 't' })).rejects.toThrow(
       /--description is required/,
     );
   });
@@ -149,7 +149,7 @@ describe('ncl groups config agents add', () => {
         id: 'ag-1',
         name: 'x',
         description: 'd',
-        'prompt-file': '/no/such/path.txt',
+        prompt_file: '/no/such/path.txt',
         tools: 't',
       }),
     ).rejects.toThrow(/Prompt file not found.*\/no\/such\/path\.txt/);
@@ -158,7 +158,7 @@ describe('ncl groups config agents add', () => {
   it('throws when --tools is missing', async () => {
     seedGroup('ag-1');
     const run = command('groups-config-agents-add');
-    await expect(run({ id: 'ag-1', name: 'x', description: 'd', 'prompt-file': promptPath })).rejects.toThrow(
+    await expect(run({ id: 'ag-1', name: 'x', description: 'd', prompt_file: promptPath })).rejects.toThrow(
       /--tools is required/,
     );
   });
@@ -167,7 +167,7 @@ describe('ncl groups config agents add', () => {
     seedGroup('ag-1');
     const run = command('groups-config-agents-add');
     await expect(
-      run({ id: 'ag-1', name: 'x', description: 'd', 'prompt-file': promptPath, tools: ' , , ' }),
+      run({ id: 'ag-1', name: 'x', description: 'd', prompt_file: promptPath, tools: ' , , ' }),
     ).rejects.toThrow(/--tools must contain at least one tool/);
   });
 });
@@ -181,7 +181,7 @@ describe('ncl groups config agents remove', () => {
     fs.writeFileSync(promptPath, 'p');
     try {
       const add = command('groups-config-agents-add');
-      await add({ id: 'ag-1', name: 'x', description: 'd', 'prompt-file': promptPath, tools: 't' });
+      await add({ id: 'ag-1', name: 'x', description: 'd', prompt_file: promptPath, tools: 't' });
 
       const remove = command('groups-config-agents-remove');
       await remove({ id: 'ag-1', name: 'x' });
