@@ -9,6 +9,16 @@ export interface AgentGroup {
   created_at: string;
 }
 
+/** Per-subagent restricted-tool definition. Mirrors the SDK's AgentDefinition
+ *  shape (see Claude Agent SDK `query()` `agents` option). Stored as values
+ *  of a JSON map keyed by subagent name in `container_configs.agents`. */
+export interface AgentDefinition {
+  description: string;
+  prompt: string;
+  tools: string[];
+  model?: string;
+}
+
 /** Per-agent-group container runtime config. Source of truth in the DB;
  *  materialized to `groups/<folder>/container.json` at spawn time. */
 export interface ContainerConfigRow {
@@ -25,6 +35,7 @@ export interface ContainerConfigRow {
   packages_npm: string; // JSON: string[]
   additional_mounts: string; // JSON: AdditionalMountConfig[]
   cli_scope: string; // 'disabled' | 'group' | 'global'
+  agents: string; // JSON: Record<string, AgentDefinition>
   updated_at: string;
 }
 
