@@ -42,6 +42,7 @@ import { readDocument } from './documents.js';
 // ---------- Token management ----------
 
 const NANOCLAW_GOOGLE_TOKEN_URL = process.env.NANOCLAW_GOOGLE_TOKEN_URL;
+const ONECLI_STUB_MODE = process.env.NANOCLAW_GOOGLE_USE_ONECLI === 'true';
 
 interface TokenEntry {
   access_token: string;
@@ -61,6 +62,13 @@ const tokenCache: TokenCache = {
 export async function getToken(
   scope: 'readonly' | 'readwrite',
 ): Promise<{ access_token: string; expires_at: number } | string> {
+  if (ONECLI_STUB_MODE) {
+    return {
+      access_token: 'onecli-managed',
+      expires_at: Date.now() + 365 * 86_400_000,
+    };
+  }
+
   if (!NANOCLAW_GOOGLE_TOKEN_URL) {
     return 'NANOCLAW_GOOGLE_TOKEN_URL is not set';
   }
