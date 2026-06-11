@@ -42,3 +42,10 @@ credentials.json
 
 agents-sdk-docs
 nanoclaw.pid
+.agents
+AGENTS.md
+
+# Internal working docs, never committed
+docs/maintainer-guide.md
+docs/drafts/
+forks.md
