@@ -14,8 +14,6 @@ JOB_NAME="upstream-sync"
 
 source "$PROJECT_ROOT/scripts/nightly-common.sh"
 
-MAIN_CHAT_JID=$(resolve_main_chat_jid)
-
 DRY_RUN=false
 if [ "${1:-}" = "--dry-run" ]; then
   DRY_RUN=true

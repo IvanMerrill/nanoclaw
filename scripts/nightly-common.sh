@@ -27,31 +27,25 @@ export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:/u
 
 log() { echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
-resolve_main_chat_jid() {
-  local db_path="$PROJECT_ROOT/store/messages.db"
-  if [ ! -f "$db_path" ]; then
-    log "WARN: Database not found at $db_path — notifications disabled"
-    echo ""
-    return
-  fi
-  /usr/bin/sqlite3 "$db_path" "SELECT jid FROM registered_groups WHERE is_main = 1 LIMIT 1" 2>/dev/null || echo ""
-}
-
+# Deliver a notification into the live v2 message flow.
+#
+# v2 has no IPC drop path — the old store/messages.db lookup and the
+# data/ipc/.../messages/*.json files are v1 vestiges that nothing reads.
+# scripts/notify-main-chat.ts resolves the active Telegram session from
+# data/v2.db and writes a messages_out row; the host delivery sweep picks it
+# up and sends it through the Telegram adapter (works even when no container
+# is running, because the session stays status='active').
 notify_ren() {
   local message="$1"
-  if [ -z "${MAIN_CHAT_JID:-}" ]; then
-    log "WARN: No main chat JID — skipping notification"
-    return
+  local output status=0
+  # `|| status=$?` keeps the failure inside a list so `set -e` in the calling
+  # nightly scripts can't abort the whole job just because a notification failed.
+  output=$(cd "$PROJECT_ROOT" && pnpm exec tsx scripts/notify-main-chat.ts "$message" 2>&1) || status=$?
+  [ -n "$output" ] && log "$output"
+  if [ "$status" -ne 0 ]; then
+    log "WARN: notify_ren delivery failed (exit $status)"
+    return 1
   fi
-  local ipc_dir="$PROJECT_ROOT/data/ipc/telegram_main/messages"
-  mkdir -p "$ipc_dir"
-  local filename="nightly-$(date +%s)-$$.json"
-  node -e "
-    const fs = require('fs');
-    const msg = { type: 'message', chatJid: process.argv[1], text: process.argv[2] };
-    fs.writeFileSync(process.argv[3], JSON.stringify(msg));
-  " "$MAIN_CHAT_JID" "$message" "$ipc_dir/$filename"
-  log "Notification written to IPC: $filename"
 }
 
 setup_worktree() {
@@ -105,8 +99,10 @@ restart_and_verify() {
   log "ERROR: Ren failed to start after update. Rolling back..."
   cd "$PROJECT_ROOT"
   git revert HEAD --no-edit 2>&1
-  npm install 2>&1
-  npm run build 2>&1
+  # Host is pnpm-managed; the revert restores pnpm-lock.yaml, so a frozen
+  # install reproduces the pre-update state exactly.
+  pnpm install --frozen-lockfile 2>&1
+  pnpm run build 2>&1
   git push origin main 2>&1
   launchctl kickstart -k "gui/$(id -u)/com.nanoclaw"
   sleep 8

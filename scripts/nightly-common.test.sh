@@ -24,6 +24,29 @@ LOG_PREFIX="[test]"
 JOB_NAME="test-job"
 source "$SCRIPT_DIR/nightly-common.sh"
 
+# The real repo root — notify_ren shells out to scripts/notify-main-chat.ts,
+# which lives here. Data dirs are isolated per-test via NANOCLAW_ROOT.
+REAL_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Build an isolated v2 data root with one active Telegram session and an empty
+# outbound.db, mirroring the real schema closely enough for the notify path.
+# Echoes the outbound.db path.
+seed_notify_root() {
+  local root="$1"
+  local ag="ag-test" sess="sess-test"
+  local v2db="$root/data/v2.db"
+  local outdir="$root/data/v2-sessions/$ag/$sess"
+  mkdir -p "$(dirname "$v2db")" "$outdir"
+  pnpm exec tsx "$REAL_REPO/scripts/q.ts" "$v2db" \
+    "CREATE TABLE messaging_groups (id TEXT PRIMARY KEY, channel_type TEXT, instance TEXT, platform_id TEXT);
+     CREATE TABLE sessions (id TEXT PRIMARY KEY, agent_group_id TEXT, messaging_group_id TEXT, status TEXT, created_at TEXT);
+     INSERT INTO messaging_groups VALUES ('mg-test','telegram','telegram','telegram:42');
+     INSERT INTO sessions VALUES ('$sess','$ag','mg-test','active','2026-01-01T00:00:00Z');" >/dev/null
+  pnpm exec tsx "$REAL_REPO/scripts/q.ts" "$outdir/outbound.db" \
+    "CREATE TABLE messages_out (id TEXT PRIMARY KEY, seq INTEGER UNIQUE, in_reply_to TEXT, timestamp TEXT, deliver_after TEXT, recurrence TEXT, kind TEXT, platform_id TEXT, channel_type TEXT, thread_id TEXT, content TEXT);" >/dev/null
+  echo "$outdir/outbound.db"
+}
+
 # --- Test 1: log() outputs with prefix and timestamp ---
 echo "Test 1: log() outputs with prefix and timestamp"
 output=$(log "hello world")
@@ -33,90 +56,53 @@ else
   fail "log() output: $output"
 fi
 
-# --- Test 2: resolve_main_chat_jid() returns empty when no database exists ---
-echo "Test 2: resolve_main_chat_jid() with no database"
-# The function logs a WARN to stdout via log(), then echoes "".
-# Capture only the last line (the return value); log lines go to stdout too.
-result=$(resolve_main_chat_jid 2>/dev/null | tail -1)
-if [ -z "$result" ]; then
-  pass "resolve_main_chat_jid() returns empty when no DB"
+# --- Test 2: notify_ren() writes a messages_out row into the active session ---
+echo "Test 2: notify_ren() delivers into outbound.db"
+notify_root="$TEST_DIR/notify2"
+outdb=$(seed_notify_root "$notify_root")
+export NANOCLAW_ROOT="$notify_root"
+PROJECT_ROOT="$REAL_REPO" notify_ren "Hello from test" >/dev/null 2>&1
+row=$(pnpm exec tsx "$REAL_REPO/scripts/q.ts" "$outdb" \
+  "SELECT kind || '|' || channel_type || '|' || platform_id || '|' || content FROM messages_out LIMIT 1")
+unset NANOCLAW_ROOT
+if [ "$row" = 'chat|telegram|telegram:42|{"text":"Hello from test"}' ]; then
+  pass "notify_ren() wrote a chat row with correct channel_type, platform_id, content"
 else
-  fail "resolve_main_chat_jid() returned '$result' instead of empty"
+  fail "notify_ren() row was: $row"
 fi
 
-# --- Test 3: resolve_main_chat_jid() reads from real SQLite database ---
-echo "Test 3: resolve_main_chat_jid() with SQLite database"
-db_dir="$PROJECT_ROOT/store"
-mkdir -p "$db_dir"
-/usr/bin/sqlite3 "$db_dir/messages.db" "CREATE TABLE registered_groups (jid TEXT, name TEXT, folder TEXT, trigger_pattern TEXT, added_at TEXT, container_config TEXT, requires_trigger INTEGER, is_main INTEGER)"
-/usr/bin/sqlite3 "$db_dir/messages.db" "INSERT INTO registered_groups (jid, is_main) VALUES ('tg:999', 1)"
-result=$(resolve_main_chat_jid)
-if [ "$result" = "tg:999" ]; then
-  pass "resolve_main_chat_jid() returns 'tg:999'"
+# --- Test 3: notify_ren() preserves special characters in the text ---
+echo "Test 3: notify_ren() handles special characters"
+notify_root="$TEST_DIR/notify3"
+outdb=$(seed_notify_root "$notify_root")
+export NANOCLAW_ROOT="$notify_root"
+PROJECT_ROOT="$REAL_REPO" notify_ren '*Bold* and "quotes" and
+newlines' >/dev/null 2>&1
+text=$(pnpm exec tsx "$REAL_REPO/scripts/q.ts" "$outdb" "SELECT content FROM messages_out LIMIT 1")
+unset NANOCLAW_ROOT
+expected='{"text":"*Bold* and \"quotes\" and\nnewlines"}'
+if [ "$text" = "$expected" ]; then
+  pass "notify_ren() preserved special characters (newlines, quotes, asterisks)"
 else
-  fail "resolve_main_chat_jid() returned '$result' instead of 'tg:999'"
+  fail "notify_ren() content: $text (expected $expected)"
 fi
 
-# --- Test 4: notify_ren() skips when MAIN_CHAT_JID is empty ---
-echo "Test 4: notify_ren() skips when MAIN_CHAT_JID is empty"
-MAIN_CHAT_JID=""
-ipc_dir="$PROJECT_ROOT/data/ipc/telegram_main/messages"
-rm -rf "$PROJECT_ROOT/data/ipc" 2>/dev/null || true
-notify_ren "test message" 2>/dev/null
-if [ ! -d "$ipc_dir" ] || [ -z "$(ls -A "$ipc_dir" 2>/dev/null)" ]; then
-  pass "notify_ren() skipped when MAIN_CHAT_JID is empty"
+# --- Test 4: notify_ren() fails gracefully when no active Telegram session ---
+echo "Test 4: notify_ren() fails gracefully with no active session"
+empty_root="$TEST_DIR/notify4"
+mkdir -p "$empty_root/data"
+pnpm exec tsx "$REAL_REPO/scripts/q.ts" "$empty_root/data/v2.db" \
+  "CREATE TABLE messaging_groups (id TEXT, channel_type TEXT, instance TEXT, platform_id TEXT);
+   CREATE TABLE sessions (id TEXT, agent_group_id TEXT, messaging_group_id TEXT, status TEXT, created_at TEXT);" >/dev/null
+export NANOCLAW_ROOT="$empty_root"
+rc=0
+# `|| rc=$?` keeps the expected failure from tripping `set -e` in this test.
+out=$(PROJECT_ROOT="$REAL_REPO" notify_ren "nobody home" 2>&1) || rc=$?
+unset NANOCLAW_ROOT
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "notify_ren delivery failed"; then
+  pass "notify_ren() returned non-zero and logged a warning"
 else
-  fail "notify_ren() created files when MAIN_CHAT_JID was empty"
-fi
-
-# --- Test 5: notify_ren() writes valid JSON ---
-echo "Test 5: notify_ren() writes valid JSON"
-MAIN_CHAT_JID="tg:12345"
-rm -rf "$PROJECT_ROOT/data/ipc" 2>/dev/null || true
-notify_ren "Hello from test"
-json_file=$(ls "$PROJECT_ROOT/data/ipc/telegram_main/messages/"*.json 2>/dev/null | head -1)
-if [ -z "$json_file" ]; then
-  fail "notify_ren() did not create a JSON file"
-else
-  valid=$(node -e "
-    const data = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-    if (data.type === 'message' && data.chatJid === 'tg:12345' && data.text === 'Hello from test') {
-      process.stdout.write('ok');
-    } else {
-      process.stdout.write('bad: ' + JSON.stringify(data));
-    }
-  " "$json_file")
-  if [ "$valid" = "ok" ]; then
-    pass "notify_ren() wrote valid JSON with correct fields"
-  else
-    fail "notify_ren() JSON validation: $valid"
-  fi
-fi
-
-# --- Test 6: notify_ren() handles special characters ---
-echo "Test 6: notify_ren() handles special characters"
-MAIN_CHAT_JID="tg:12345"
-rm -rf "$PROJECT_ROOT/data/ipc" 2>/dev/null || true
-notify_ren '*Bold* and "quotes" and
-newlines'
-json_file=$(ls "$PROJECT_ROOT/data/ipc/telegram_main/messages/"*.json 2>/dev/null | head -1)
-if [ -z "$json_file" ]; then
-  fail "notify_ren() did not create a JSON file for special characters"
-else
-  valid=$(node -e "
-    const data = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-    const expected = '*Bold* and \"quotes\" and\nnewlines';
-    if (data.text === expected) {
-      process.stdout.write('ok');
-    } else {
-      process.stdout.write('bad: text=' + JSON.stringify(data.text) + ' expected=' + JSON.stringify(expected));
-    }
-  " "$json_file")
-  if [ "$valid" = "ok" ]; then
-    pass "notify_ren() preserved special characters (newlines, quotes, asterisks)"
-  else
-    fail "notify_ren() special characters: $valid"
-  fi
+  fail "notify_ren() rc=$rc out=$out"
 fi
 
 # --- Test 7: setup_worktree() creates a valid worktree ---
