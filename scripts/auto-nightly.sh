@@ -84,13 +84,41 @@ if [ "$GATES_ONLY" = false ]; then
 
   # -------------------------------------------------------------------------
   # Phase 3 — Local-only deps, full-auto including majors
+  #
+  # Scoped deliberately: shared deps (anything on upstream/main, incl. the whole
+  # agent-runner tree) are owned by Phase 1 and must NOT be chased to latest here
+  # — that would re-drift them ahead of upstream every night. Channel adapters
+  # are owned by Phase 2 (/update-skills). So full-auto applies only to:
+  #   • google-mcp — entirely local, not on upstream, not a skill
+  #   • host deps that are local-only AND not channel adapters (e.g. pino)
   # -------------------------------------------------------------------------
-  log "Phase 3: local dependency updates (full-auto)"
-  # Host: pnpm --latest still honors the 3-day minimumReleaseAge gate.
-  ( cd "$WORKTREE_DIR" && pnpm update --latest ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: pnpm update failed"
-  # agent-runner (bun) and google-mcp (npm): no release-age gate — gates catch breakage.
-  ( cd "$WORKTREE_DIR/container/agent-runner" && bun update --latest ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: bun update failed"
+  log "Phase 3: local-only dependency updates (full-auto)"
+
+  # google-mcp: 100% local → bump everything to latest.
   ( cd "$WORKTREE_DIR/container/nanoclaw-google-mcp" && npx --yes npm-check-updates -u && npm install ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: google-mcp update failed"
+
+  # Host local-only, non-adapter deps: compute the set that is in the worktree's
+  # package.json but NOT in upstream/main's, excluding channel-adapter packages
+  # (Phase 2 owns those). Update only those — shared deps stay where upstream put them.
+  LOCAL_HOST_DEPS=$(node -e '
+    const fs = require("fs");
+    const { execSync } = require("child_process");
+    const live = JSON.parse(fs.readFileSync(process.argv[1] + "/package.json", "utf8"));
+    const up = JSON.parse(execSync("git -C " + process.argv[2] + " show upstream/main:package.json").toString());
+    const upAll = { ...up.dependencies, ...up.devDependencies };
+    const all = { ...live.dependencies, ...live.devDependencies };
+    const isAdapter = (k) => /chat-adapter|@whiskeysockets\/baileys|wechat-ilink|@resend\/chat-sdk|^chat$/.test(k);
+    const local = Object.keys(all).filter((k) => upAll[k] === undefined && !isAdapter(k));
+    process.stdout.write(local.join(" "));
+  ' "$WORKTREE_DIR" "$PROJECT_ROOT" 2>/dev/null)
+  if [ -n "$LOCAL_HOST_DEPS" ]; then
+    log "Phase 3: host local-only deps → $LOCAL_HOST_DEPS"
+    # pnpm --latest still honors the 3-day minimumReleaseAge gate on the host tree.
+    ( cd "$WORKTREE_DIR" && pnpm update --latest $LOCAL_HOST_DEPS ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: host local-dep update failed"
+  else
+    log "Phase 3: no host local-only deps to update"
+  fi
+
   # Keep the vestigial npm lockfiles from reappearing in the pnpm/bun trees.
   rm -f "$WORKTREE_DIR/package-lock.json" "$WORKTREE_DIR/container/agent-runner/package-lock.json"
 fi
