@@ -64,7 +64,19 @@ setup_worktree() {
 cleanup_worktree() {
   if [ -n "${WORKTREE_DIR:-}" ] && [ -d "$WORKTREE_DIR" ]; then
     log "Cleaning up worktree..."
-    git -C "$PROJECT_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null || rm -rf "$WORKTREE_DIR"
+    chmod -R u+rwx "$WORKTREE_DIR" 2>/dev/null || true
+    chflags -R nouchg,noschg "$WORKTREE_DIR" 2>/dev/null || true   # macOS: clear any immutable flags
+    git -C "$PROJECT_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null
+    # The e2e gate's container can leave files owned by a uid the host user
+    # can't delete (Docker Desktop file sharing). Nuke them via a throwaway
+    # container running as root — uses the LOCAL image, so no docker.io pull.
+    if [ -d "$WORKTREE_DIR" ]; then
+      docker run --rm --user 0:0 --entrypoint rm \
+        -v "$(dirname "$WORKTREE_DIR")":/wt \
+        "$(image_base):latest" -rf "/wt/$(basename "$WORKTREE_DIR")" 2>/dev/null || true
+      rm -rf "$WORKTREE_DIR" 2>/dev/null || true
+    fi
+    git -C "$PROJECT_ROOT" worktree prune 2>/dev/null || true
   fi
   if [ -n "${WORKTREE_BRANCH:-}" ]; then
     git -C "$PROJECT_ROOT" branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
@@ -114,4 +126,92 @@ restart_and_verify() {
     log "CRITICAL: Ren failed to start even after rollback. Manual intervention required."
   fi
   return 1
+}
+
+# The slug-scoped base image name for this install (e.g. nanoclaw-agent-v2-98989602).
+# The install slug is sha1(project root)[:8], so a worktree at a different path
+# would resolve a DIFFERENT slug. We pin it to the live install root via
+# NANOCLAW_PROJECT_ROOT so build / e2e / promote all agree on the image the
+# running host actually uses.
+image_base() {
+  ( NANOCLAW_PROJECT_ROOT="$PROJECT_ROOT" source "$PROJECT_ROOT/setup/lib/install-slug.sh" && container_image_base )
+}
+
+# Run a command with a wall-clock timeout (macOS has no `timeout` binary).
+# Returns 124 if it had to be killed. Detaches the client on timeout — a
+# server-side buildkit build may continue, but the gate fails fast instead of
+# hanging the whole pipeline (Docker Desktop's registry proxy can wedge).
+with_timeout() {
+  local secs="$1"; shift
+  "$@" & local pid=$!
+  ( sleep "$secs"; kill -0 "$pid" 2>/dev/null && { kill -TERM "$pid" 2>/dev/null; sleep 3; kill -KILL "$pid" 2>/dev/null; } ) & local wd=$!
+  wait "$pid" 2>/dev/null; local rc=$?
+  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+  [ "$rc" -gt 128 ] && return 124
+  return "$rc"
+}
+
+# Deterministic pre-deploy gate stack. Runs every check that stands between an
+# update and production, in an isolated worktree against an isolated image tag.
+# Args: <worktree_root> <candidate_image_tag> <rebuild_image: true|false>
+# On failure: sets GATE_FAILED to the failing gate name and returns 1.
+#
+# Image handling: when rebuild_image=true (the container tree changed) the image
+# is built as <base>:<tag> and the e2e smoke runs against THAT candidate, so the
+# live <base>:latest is never touched until promote_image() on deploy. When
+# rebuild_image=false (host-only night) we skip the build entirely — no docker.io
+# pull — and run the e2e against the existing <base>:latest.
+#
+# The slow Docker gates are wrapped in with_timeout so a wedged registry proxy
+# fails the gate in minutes instead of hanging the pipeline.
+GATE_FAILED=""
+GATE_IMAGE_BUILD_TIMEOUT="${GATE_IMAGE_BUILD_TIMEOUT:-1800}"   # 30 min
+GATE_E2E_TIMEOUT="${GATE_E2E_TIMEOUT:-300}"                    # 5 min
+run_gates() {
+  local root="$1" img_tag="$2" rebuild_image="${3:-true}"
+  local base; base="$(image_base)"
+  GATE_FAILED=""
+
+  _gate() {
+    local name="$1"; shift
+    log "GATE → $name"
+    if "$@"; then
+      log "GATE ✓ $name"
+      return 0
+    fi
+    GATE_FAILED="$name"
+    log "GATE ✗ $name"
+    return 1
+  }
+
+  _gate "host-typecheck+build"  bash -c "cd '$root' && pnpm run build" || return 1
+  _gate "container-typecheck"   bash -c "cd '$root' && pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit" || return 1
+  _gate "google-mcp-build"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm run build" || return 1
+  _gate "host-tests"            bash -c "cd '$root' && pnpm test" || return 1
+  _gate "agent-runner-tests"    bash -c "cd '$root/container/agent-runner' && bun test" || return 1
+  _gate "google-mcp-tests"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm test" || return 1
+
+  local e2e_image
+  if [ "$rebuild_image" = "true" ]; then
+    _gate "container-image-build" with_timeout "$GATE_IMAGE_BUILD_TIMEOUT" \
+      env NANOCLAW_PROJECT_ROOT="$PROJECT_ROOT" CONTAINER_RUNTIME=docker bash -c "cd '$root' && ./container/build.sh '$img_tag'" || return 1
+    e2e_image="${base}:${img_tag}"
+  else
+    log "GATE — container-image-build SKIPPED (container tree unchanged; e2e runs against live :latest)"
+    e2e_image="${base}:latest"
+  fi
+
+  _gate "e2e-smoke" with_timeout "$GATE_E2E_TIMEOUT" \
+    env CONTAINER_IMAGE="$e2e_image" bash -c "cd '$root' && pnpm exec tsx scripts/test-v2-host.ts" || return 1
+
+  log "ALL GATES PASSED"
+  return 0
+}
+
+# Promote the gate-tested candidate image to the live :latest tag.
+promote_image() {
+  local img_tag="$1"
+  local base; base="$(image_base)"
+  log "Promoting ${base}:${img_tag} → ${base}:latest"
+  docker tag "${base}:${img_tag}" "${base}:latest"
 }
