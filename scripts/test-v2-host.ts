@@ -23,6 +23,7 @@ import { initDb } from '../src/db/connection.js';
 import { runMigrations } from '../src/db/migrations/index.js';
 import { createAgentGroup } from '../src/db/agent-groups.js';
 import { createMessagingGroup, createMessagingGroupAgent } from '../src/db/messaging-groups.js';
+import { ensureContainerConfig } from '../src/db/container-configs.js';
 
 const centralDb = initDb(path.join(TEST_DIR, 'v2.db'));
 runMigrations(centralDb);
@@ -40,6 +41,12 @@ createAgentGroup({
   agent_provider: 'claude',
   created_at: new Date().toISOString(),
 });
+
+// Seed the container config row spawnContainer() requires. The real flow does
+// this in group-init.ts (ensureContainerConfig); this harness predates the
+// container_configs table, so without it spawnContainer throws "Container
+// config not found" and no container ever starts.
+ensureContainerConfig('ag-e2e');
 
 createMessagingGroup({
   id: 'mg-e2e',
@@ -142,8 +149,14 @@ await new Promise<void>((resolve) => {
 console.log('\n\n=== Results ===');
 printState();
 
-// Clean up test group dir
-fs.rmSync(testGroupDir, { recursive: true, force: true });
+// Clean up test group dir. Best-effort: the container may have written files
+// (e.g. .claude-fragments) the host user can't remove, and a teardown EACCES
+// must not mask a successful run — the response above is the real result.
+try {
+  fs.rmSync(testGroupDir, { recursive: true, force: true });
+} catch (err) {
+  console.log(`  (cleanup warning, ignored: ${err instanceof Error ? err.message : err})`);
+}
 
 process.exit(0);
 
