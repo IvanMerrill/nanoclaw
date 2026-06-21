@@ -67,17 +67,40 @@ setup_worktree() {
 cleanup_worktree() {
   if [ -n "${WORKTREE_DIR:-}" ] && [ -d "$WORKTREE_DIR" ]; then
     log "Cleaning up worktree..."
+    local stuck_dir; stuck_dir="$(dirname "$WORKTREE_DIR")/.stuck"
+
+    # Best-effort: retry-delete anything previously quarantined. Docker Desktop
+    # can leave a worktree dir undeletable when the e2e container's bind mount
+    # isn't fully released during --rm teardown — a FUSE phantom that even
+    # container-root can't rm. Such dirs usually become deletable later (once
+    # Docker releases the handle / on its next restart), so sweep them here.
+    if [ -d "$stuck_dir" ]; then
+      rm -rf "$stuck_dir"/* 2>/dev/null || true
+      rmdir "$stuck_dir" 2>/dev/null || true
+    fi
+
     chmod -R u+rwx "$WORKTREE_DIR" 2>/dev/null || true
     chflags -R nouchg,noschg "$WORKTREE_DIR" 2>/dev/null || true   # macOS: clear any immutable flags
     git -C "$PROJECT_ROOT" worktree remove --force "$WORKTREE_DIR" 2>/dev/null
-    # The e2e gate's container can leave files owned by a uid the host user
-    # can't delete (Docker Desktop file sharing). Nuke them via a throwaway
-    # container running as root — uses the LOCAL image, so no docker.io pull.
+    # On Linux/systemd hosts the e2e container leaves genuinely root-owned files;
+    # nuke them via a throwaway root container (LOCAL image, no docker.io pull).
     if [ -d "$WORKTREE_DIR" ]; then
       docker run --rm --user 0:0 --entrypoint rm \
         -v "$(dirname "$WORKTREE_DIR")":/wt \
         "$(image_base):latest" -rf "/wt/$(basename "$WORKTREE_DIR")" 2>/dev/null || true
       rm -rf "$WORKTREE_DIR" 2>/dev/null || true
+    fi
+    # If it STILL survives (macOS FUSE phantom — undeletable without sudo or a
+    # Docker restart), quarantine it via rename (needs only parent write, which
+    # we have) so it never clutters .worktrees / `git worktree list` or blocks a
+    # future run. The next cleanup's sweep above retries deletion.
+    if [ -d "$WORKTREE_DIR" ]; then
+      mkdir -p "$stuck_dir" 2>/dev/null || true
+      if mv "$WORKTREE_DIR" "$stuck_dir/$(basename "$WORKTREE_DIR")" 2>/dev/null; then
+        log "WARN: worktree was undeletable (Docker FUSE phantom); quarantined to $stuck_dir — clears on next run or via 'sudo rm -rf $stuck_dir'"
+      else
+        log "WARN: worktree $WORKTREE_DIR could not be removed or quarantined"
+      fi
     fi
     git -C "$PROJECT_ROOT" worktree prune 2>/dev/null || true
   fi
