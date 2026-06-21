@@ -19,7 +19,17 @@ cd "$SCRIPT_DIR"
 source "$PROJECT_ROOT/setup/lib/install-slug.sh"
 IMAGE_NAME="$(container_image_base)"
 TAG="${1:-latest}"
-CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-container}"
+# This install runs Docker end-to-end (src/container-runtime.ts hardcodes docker;
+# Apple Container keeps a separate image store the host can't see). Default to the
+# `container` binary only if it actually exists, otherwise docker. Callers can still
+# override with CONTAINER_RUNTIME=...
+if [ -z "${CONTAINER_RUNTIME:-}" ]; then
+    if command -v container >/dev/null 2>&1; then
+        CONTAINER_RUNTIME="container"
+    else
+        CONTAINER_RUNTIME="docker"
+    fi
+fi
 
 # Caller's env takes precedence; fall back to .env.
 if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then

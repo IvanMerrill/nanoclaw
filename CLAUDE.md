@@ -218,7 +218,7 @@ Run commands directly — don't tell the user to run them.
 # Host (Node + pnpm)
 pnpm run dev          # Host with hot reload
 pnpm run build        # Compile host TypeScript (src/)
-./container/build.sh  # Rebuild agent container image (nanoclaw-agent:latest)
+./container/build.sh  # Rebuild agent container image (nanoclaw-agent:latest) — Docker runtime
 pnpm test             # Host tests (vitest)
 
 # Agent-runner (Bun — separate package tree under container/agent-runner/)
@@ -227,6 +227,8 @@ cd container/agent-runner && bun test      # Container tests (bun:test)
 ```
 
 Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` from root (or `bun run typecheck` from `container/agent-runner/`).
+
+**Container runtime is Docker, end-to-end.** The host hardcodes Docker (`src/container-runtime.ts`: `CONTAINER_RUNTIME_BIN = 'docker'`), so images must be built with Docker too — Apple Container keeps a *separate* image store the host can't see, so an image built with `container` would be invisible to the running host. Upstream's `container/build.sh` historically defaulted `CONTAINER_RUNTIME` to the Apple `container` binary; this install patches it to auto-detect (use `container` only if that binary exists, else `docker`), so a bare `./container/build.sh` now Just Works here. If you ever see `container: command not found` from a build, that auto-detect was reverted by an upstream sync — re-apply it, or run `CONTAINER_RUNTIME=docker ./container/build.sh`.
 
 Service management:
 ```bash
