@@ -20,8 +20,11 @@ elif command -v mise &>/dev/null; then
   eval "$(mise env 2>/dev/null)" || true
 fi
 
-# Ensure shims dir and homebrew are in PATH as fallback
-export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# Ensure shims dir and homebrew are in PATH as fallback.
+# bun is NOT managed by mise and lives in ~/.bun/bin — without it the
+# container gates (container-typecheck deps, agent-runner-tests) fail with
+# "bun: command not found" under the minimal launchd PATH.
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 # --- Functions ---
 
@@ -184,6 +187,15 @@ run_gates() {
     return 1
   }
 
+  # The gate stack must install exactly what it tests, from the lockfiles — a
+  # fresh worktree has no node_modules in any tree, and we don't want the gates
+  # to silently rely on an earlier phase's install side-effects (that breaks
+  # --gates-only and any no-op night). Materialize host (pnpm) and container
+  # (Bun) deps up front; without the container tree, tsc can't resolve
+  # `@types/bun` (TS2688) and `bun test` has nothing to run against.
+  _gate "host-deps"             bash -c "cd '$root' && pnpm install --frozen-lockfile" || return 1
+  _gate "container-deps"        bash -c "cd '$root/container/agent-runner' && bun install --frozen-lockfile" || return 1
+  _gate "google-mcp-deps"       bash -c "cd '$root/container/nanoclaw-google-mcp' && npm ci" || return 1
   _gate "host-typecheck+build"  bash -c "cd '$root' && pnpm run build" || return 1
   _gate "container-typecheck"   bash -c "cd '$root' && pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit" || return 1
   _gate "google-mcp-build"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm run build" || return 1
