@@ -187,12 +187,16 @@ run_gates() {
     return 1
   }
 
-  _gate "host-typecheck+build"  bash -c "cd '$root' && pnpm run build" || return 1
-  # The container (Bun) package tree is separate from the host pnpm tree and is
-  # never populated by the worktree checkout or the host pnpm install. Without
-  # its node_modules, tsc can't resolve `@types/bun` (TS2688) and `bun test`
-  # has nothing to run against. Install it before the gates that depend on it.
+  # The gate stack must install exactly what it tests, from the lockfiles — a
+  # fresh worktree has no node_modules in any tree, and we don't want the gates
+  # to silently rely on an earlier phase's install side-effects (that breaks
+  # --gates-only and any no-op night). Materialize host (pnpm) and container
+  # (Bun) deps up front; without the container tree, tsc can't resolve
+  # `@types/bun` (TS2688) and `bun test` has nothing to run against.
+  _gate "host-deps"             bash -c "cd '$root' && pnpm install --frozen-lockfile" || return 1
   _gate "container-deps"        bash -c "cd '$root/container/agent-runner' && bun install --frozen-lockfile" || return 1
+  _gate "google-mcp-deps"       bash -c "cd '$root/container/nanoclaw-google-mcp' && npm ci" || return 1
+  _gate "host-typecheck+build"  bash -c "cd '$root' && pnpm run build" || return 1
   _gate "container-typecheck"   bash -c "cd '$root' && pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit" || return 1
   _gate "google-mcp-build"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm run build" || return 1
   _gate "host-tests"            bash -c "cd '$root' && pnpm test" || return 1
