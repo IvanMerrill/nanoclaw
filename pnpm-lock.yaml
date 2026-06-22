@@ -71,6 +71,9 @@ importers:
       cron-parser:
         specifier: 5.5.0
         version: 5.5.0
+      https-proxy-agent:
+        specifier: 7.0.6
+        version: 7.0.6
       kleur:
         specifier: ^4.1.5
         version: 4.1.5
