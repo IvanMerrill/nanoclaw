@@ -94,8 +94,31 @@ if [ "$GATES_ONLY" = false ]; then
   # -------------------------------------------------------------------------
   log "Phase 3: local-only dependency updates (full-auto)"
 
-  # google-mcp: 100% local → bump everything to latest.
-  ( cd "$WORKTREE_DIR/container/nanoclaw-google-mcp" && npx --yes npm-check-updates -u && npm install ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: google-mcp update failed"
+  # google-mcp: 100% local → bump everything to latest, except:
+  #
+  # vitest is held back. vitest@5.x peers @vitest/browser-playwright at an exact
+  # version, which peers back at an exact vitest; npm 10.8.2 crashes walking that
+  # loop ("Cannot read properties of null (reading 'edgesOut')") instead of
+  # reporting ERESOLVE. It blocked every run from 2026-09-07 onward. vitest is a
+  # devDependency — test tooling only, never loaded at runtime — so pinning it
+  # costs nothing operationally. Drop --reject once vitest 5's peer set is
+  # self-consistent, or once npm is new enough to report the conflict properly.
+  GMCP_DIR="$WORKTREE_DIR/container/nanoclaw-google-mcp"
+  cp "$GMCP_DIR/package.json"      "$GMCP_DIR/package.json.bak"
+  cp "$GMCP_DIR/package-lock.json" "$GMCP_DIR/package-lock.json.bak"
+  if ( cd "$GMCP_DIR" && npx --yes npm-check-updates -u --reject vitest && npm install ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log"; then
+    rm -f "$GMCP_DIR/package.json.bak" "$GMCP_DIR/package-lock.json.bak"
+  else
+    # ncu rewrites package.json BEFORE npm install runs, so a failed install leaves a
+    # bumped manifest against a stale lockfile — a combination that never worked. The
+    # old code logged a warning and carried on, so Phase 4's `npm ci` then failed on
+    # that inconsistency and the alert named the gate instead of the real cause. That
+    # misattribution cost 16 nights. Restoring both keeps the worktree coherent, so the
+    # gates judge a known-good google-mcp and the rest of the night can still deploy.
+    mv "$GMCP_DIR/package.json.bak"      "$GMCP_DIR/package.json"
+    mv "$GMCP_DIR/package-lock.json.bak" "$GMCP_DIR/package-lock.json"
+    log "WARN: google-mcp dependency update failed — REVERTED to pinned versions, continuing"
+  fi
 
   # Host local-only, non-adapter deps: compute the set that is in the worktree's
   # package.json but NOT in upstream/main's, excluding channel-adapter packages
