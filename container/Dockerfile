@@ -119,6 +119,13 @@ COPY cli-tools.json install-cli-tools.sh /tmp/
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     sh /tmp/install-cli-tools.sh /tmp/cli-tools.json
 
+# ---- Google MCP server (fork bridge to OneCLI) -------------------------------
+# Custom Google MCP server for Drive, Docs, Calendar, Gmail access.
+# Runs in NANOCLAW_GOOGLE_USE_ONECLI=true stub mode: credentials come from the
+# OneCLI vault at request time; no tokens ever live in the container.
+COPY nanoclaw-google-mcp ./nanoclaw-google-mcp
+RUN cd nanoclaw-google-mcp && npm ci && npm run build
+
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
