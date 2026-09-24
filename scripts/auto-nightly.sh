@@ -1,0 +1,239 @@
+#!/bin/bash
+# Unified nightly "keep Ren current" pipeline.
+#
+# One ordered run, in an isolated worktree, that updates everything Ren needs,
+# proves it works through a deterministic gate stack, and only then deploys —
+# committing to the fork, promoting the tested image, and restarting Ren. On
+# any gate failure it discards the worktree and notifies; nothing red ever ships.
+#
+# Layers updated (in order):
+#   1. Upstream framework + shared deps  → /update-nanoclaw (tracks upstream)
+#   2. Channel adapters + providers      → /update-skills   (tracks their branches)
+#   3. Local-only deps (full-auto, incl. majors): host (pnpm, 3-day gate),
+#      agent-runner (bun), google-mcp (npm) — gates are the safety net.
+#
+# Gate stack (scripts/nightly-common.sh run_gates): host+container typecheck,
+# google-mcp build, host/agent-runner/google-mcp tests, isolated container
+# image build, real host→container→Claude→delivery e2e smoke.
+#
+# Usage:
+#   ./scripts/auto-nightly.sh            # full run
+#   ./scripts/auto-nightly.sh --dry-run  # update + gates, NO deploy (discards worktree)
+#   ./scripts/auto-nightly.sh --gates-only  # just run the gate stack against a fresh worktree
+
+set -uo pipefail   # not -e: we handle failures explicitly so a notify can fire
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LOG_PREFIX="[nightly]"
+JOB_NAME="nightly"
+CANDIDATE_TAG="nightly-test"
+
+source "$PROJECT_ROOT/scripts/nightly-common.sh"
+
+DRY_RUN=false
+GATES_ONLY=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    --gates-only) GATES_ONLY=true ;;
+  esac
+done
+
+CLAUDE_TOOLS="Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch,Skill"
+CLAUDE_PHASE_TIMEOUT="${CLAUDE_PHASE_TIMEOUT:-2400}"   # 40 min per agent phase
+run_claude() {
+  # $1 = phase label, $2 = prompt. Tees to the nightly log. Timeout-wrapped so a
+  # stuck agent session can't hang the pipeline; the gate stack is the real
+  # safety net regardless of what these phases produce.
+  local label="$1" prompt="$2"
+  log "Claude phase: $label"
+  with_timeout "$CLAUDE_PHASE_TIMEOUT" \
+    bash -c "cd '$WORKTREE_DIR' && claude -p \"\$1\" --allowedTools '$CLAUDE_TOOLS'" _ "$prompt" \
+    2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log"
+  local rc=${PIPESTATUS[0]}
+  [ "$rc" = 124 ] && log "WARN: Claude phase '$label' timed out after ${CLAUDE_PHASE_TIMEOUT}s"
+  return 0   # never fatal — gates decide what's safe
+}
+
+setup_worktree
+trap cleanup_worktree EXIT
+
+# Worktrees don't carry the gitignored .env, but the gate stack needs it: the
+# e2e smoke reads ONECLI_URL (the local gateway — without it the OneCLI SDK
+# falls back to the cloud API and 401s), and container/build.sh reads build
+# args (INSTALL_CJK_FONTS, etc.).
+cp "$PROJECT_ROOT/.env" "$WORKTREE_DIR/.env" 2>/dev/null && log "copied .env into worktree" || log "WARN: no .env to copy into worktree"
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Upstream framework + shared deps (tracks upstream)
+#
+# Skipped when the fork is too far behind upstream to be worth attempting
+# unattended (default threshold: 100 commits). /update-nanoclaw is
+# conflict-resolution work — Claude Code CAN'T resolve hundreds of commits'
+# worth of conflicts inside a 40-min agent-phase budget, so it just times out
+# and leaves the worktree in a half-merged state that fails the gates.
+# Override with NIGHTLY_UPSTREAM_MAX_DRIFT=<n> or =0 to always attempt.
+# NIGHTLY_SKIP_UPSTREAM=true skips unconditionally.
+# ---------------------------------------------------------------------------
+UPSTREAM_MAX_DRIFT="${NIGHTLY_UPSTREAM_MAX_DRIFT:-100}"
+if [ "$GATES_ONLY" = false ]; then
+  log "Phase 1: upstream sync"
+  git -C "$PROJECT_ROOT" fetch upstream 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: upstream fetch failed"
+  NEW_COMMITS=$(git -C "$PROJECT_ROOT" rev-list --count "HEAD..upstream/main" 2>/dev/null || echo 0)
+  log "Upstream has $NEW_COMMITS new commit(s)"
+  if [ "${NIGHTLY_SKIP_UPSTREAM:-}" = "true" ]; then
+    log "Phase 1: SKIPPED (NIGHTLY_SKIP_UPSTREAM=true)"
+  elif [ "$NEW_COMMITS" = "0" ]; then
+    log "Phase 1: nothing to sync"
+  elif [ "$UPSTREAM_MAX_DRIFT" != "0" ] && [ "$NEW_COMMITS" -gt "$UPSTREAM_MAX_DRIFT" ]; then
+    log "Phase 1: SKIPPED — $NEW_COMMITS commits behind (> threshold $UPSTREAM_MAX_DRIFT). Reconcile manually with /update-nanoclaw or raise NIGHTLY_UPSTREAM_MAX_DRIFT."
+  else
+    run_claude "update-nanoclaw" "Run /update-nanoclaw to bring upstream changes into this customized install. Work entirely inside $WORKTREE_DIR. Apply only changes relevant to how this install is used (Telegram, not WhatsApp; Google MCP). Reconcile dependency versions toward upstream's. Do NOT push, restart, or deploy — just leave the reconciled changes in the worktree. Do not run the gate stack; the pipeline does that."
+  fi
+
+  # -------------------------------------------------------------------------
+  # Phase 2 — Channel adapters + providers (tracks their branches)
+  #
+  # This fork's origin has no `channels`/`providers` branches (they only live
+  # upstream), so /update-skills has nothing to fetch and just times out.
+  # Auto-detect and skip. Override with NIGHTLY_SKIP_SKILLS=false to force.
+  # -------------------------------------------------------------------------
+  log "Phase 2: skills update"
+  SKILL_BRANCHES=$(git ls-remote --heads origin channels providers 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${NIGHTLY_SKIP_SKILLS:-}" = "true" ] || { [ "${NIGHTLY_SKIP_SKILLS:-}" != "false" ] && [ "$SKILL_BRANCHES" = "0" ]; }; then
+    log "Phase 2: SKIPPED (no channels/providers branches on origin — /update-skills has nothing to fetch)"
+  else
+    run_claude "update-skills" "Run /update-skills to re-apply installed skills and pull their latest code and pinned dependency versions from the channels/providers branches. Work inside $WORKTREE_DIR. Do NOT push, restart, or deploy. Do not run the gate stack."
+  fi
+
+  # -------------------------------------------------------------------------
+  # Phase 3 — Local-only deps, full-auto including majors
+  #
+  # Scoped deliberately: shared deps (anything on upstream/main, incl. the whole
+  # agent-runner tree) are owned by Phase 1 and must NOT be chased to latest here
+  # — that would re-drift them ahead of upstream every night. Channel adapters
+  # are owned by Phase 2 (/update-skills). So full-auto applies only to:
+  #   • google-mcp — entirely local, not on upstream, not a skill
+  #   • host deps that are local-only AND not channel adapters (e.g. pino)
+  # -------------------------------------------------------------------------
+  log "Phase 3: local-only dependency updates (full-auto)"
+
+  # google-mcp: 100% local → bump everything to latest, except:
+  #
+  # vitest is held back. vitest@5.x peers @vitest/browser-playwright at an exact
+  # version, which peers back at an exact vitest; npm 10.8.2 crashes walking that
+  # loop ("Cannot read properties of null (reading 'edgesOut')") instead of
+  # reporting ERESOLVE. It blocked every run from 2026-09-07 onward. vitest is a
+  # devDependency — test tooling only, never loaded at runtime — so pinning it
+  # costs nothing operationally. Drop --reject once vitest 5's peer set is
+  # self-consistent, or once npm is new enough to report the conflict properly.
+  GMCP_DIR="$WORKTREE_DIR/container/nanoclaw-google-mcp"
+  cp "$GMCP_DIR/package.json"      "$GMCP_DIR/package.json.bak"
+  cp "$GMCP_DIR/package-lock.json" "$GMCP_DIR/package-lock.json.bak"
+  if ( cd "$GMCP_DIR" && npx --yes npm-check-updates -u --reject vitest && npm install ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log"; then
+    rm -f "$GMCP_DIR/package.json.bak" "$GMCP_DIR/package-lock.json.bak"
+  else
+    # ncu rewrites package.json BEFORE npm install runs, so a failed install leaves a
+    # bumped manifest against a stale lockfile — a combination that never worked. The
+    # old code logged a warning and carried on, so Phase 4's `npm ci` then failed on
+    # that inconsistency and the alert named the gate instead of the real cause. That
+    # misattribution cost 16 nights. Restoring both keeps the worktree coherent, so the
+    # gates judge a known-good google-mcp and the rest of the night can still deploy.
+    mv "$GMCP_DIR/package.json.bak"      "$GMCP_DIR/package.json"
+    mv "$GMCP_DIR/package-lock.json.bak" "$GMCP_DIR/package-lock.json"
+    log "WARN: google-mcp dependency update failed — REVERTED to pinned versions, continuing"
+  fi
+
+  # Host local-only, non-adapter deps: compute the set that is in the worktree's
+  # package.json but NOT in upstream/main's, excluding channel-adapter packages
+  # (Phase 2 owns those). Update only those — shared deps stay where upstream put them.
+  LOCAL_HOST_DEPS=$(node -e '
+    const fs = require("fs");
+    const { execSync } = require("child_process");
+    const live = JSON.parse(fs.readFileSync(process.argv[1] + "/package.json", "utf8"));
+    const up = JSON.parse(execSync("git -C " + process.argv[2] + " show upstream/main:package.json").toString());
+    const upAll = { ...up.dependencies, ...up.devDependencies };
+    const all = { ...live.dependencies, ...live.devDependencies };
+    const isAdapter = (k) => /chat-adapter|@whiskeysockets\/baileys|wechat-ilink|@resend\/chat-sdk|^chat$/.test(k);
+    const local = Object.keys(all).filter((k) => upAll[k] === undefined && !isAdapter(k));
+    process.stdout.write(local.join(" "));
+  ' "$WORKTREE_DIR" "$PROJECT_ROOT" 2>/dev/null)
+  if [ -n "$LOCAL_HOST_DEPS" ]; then
+    log "Phase 3: host local-only deps → $LOCAL_HOST_DEPS"
+    # pnpm --latest still honors the 3-day minimumReleaseAge gate on the host tree.
+    ( cd "$WORKTREE_DIR" && pnpm update --latest $LOCAL_HOST_DEPS ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: host local-dep update failed"
+  else
+    log "Phase 3: no host local-only deps to update"
+  fi
+
+  # Keep the vestigial npm lockfiles from reappearing in the pnpm/bun trees.
+  rm -f "$WORKTREE_DIR/package-lock.json" "$WORKTREE_DIR/container/agent-runner/package-lock.json"
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Gate stack (deterministic; the safety net)
+# ---------------------------------------------------------------------------
+# Only rebuild the container image when something baked INTO it changed
+# (Dockerfile, build script, agent-runner deps, google-mcp). agent-runner/src
+# and skills are mounted at runtime, not baked, so they don't need a rebuild —
+# the e2e smoke exercises them against the live image. Skipping the rebuild on
+# host-only nights avoids touching docker.io entirely (and its flaky proxy).
+REBUILD_IMAGE=false
+if ! git -C "$WORKTREE_DIR" diff --quiet HEAD -- \
+     container/Dockerfile container/build.sh \
+     container/agent-runner/package.json container/agent-runner/bun.lock \
+     container/nanoclaw-google-mcp 2>/dev/null; then
+  REBUILD_IMAGE=true
+fi
+log "Phase 4: gate stack (rebuild_image=$REBUILD_IMAGE)"
+if ! run_gates "$WORKTREE_DIR" "$CANDIDATE_TAG" "$REBUILD_IMAGE"; then
+  log "Pipeline halted: gate '$GATE_FAILED' failed — nothing deployed."
+  notify_ren "$(printf '⚠️ *Nightly update halted*\n\nGate _%s_ failed — the update was discarded and *not deployed*. Ren is unchanged and still running on the previous version.\n\nCheck logs/nightly.log.' "$GATE_FAILED")"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Decide & deploy
+# ---------------------------------------------------------------------------
+cd "$WORKTREE_DIR"
+git add -A
+if git diff --cached --quiet; then
+  log "No changes after update — nothing to deploy."
+  notify_ren "*Nightly update* — everything already current, no changes."
+  exit 0
+fi
+
+SUMMARY=$(git -C "$WORKTREE_DIR" diff --cached --stat | tail -25)
+
+if [ "$DRY_RUN" = true ] || [ "$GATES_ONLY" = true ]; then
+  log "DRY RUN — gates passed, changes present, NOT deploying. Diff:"
+  echo "$SUMMARY" | tee -a "$PROJECT_ROOT/logs/nightly.log"
+  exit 0
+fi
+
+log "Phase 5: deploy"
+git commit -q -m "chore: automated nightly update $(date +%Y-%m-%d)"
+git push origin "$WORKTREE_BRANCH:main" 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || {
+  log "ERROR: push failed — not deploying."
+  notify_ren "⚠️ *Nightly update* — gates passed but push to origin failed. Not deployed."
+  exit 1
+}
+
+# Bring the live tree to the pushed commit, rebuild the host, promote the image.
+git -C "$PROJECT_ROOT" pull --ff-only origin main 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log"
+( cd "$PROJECT_ROOT" && pnpm install --frozen-lockfile && pnpm run build ) 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log"
+# Only promote a candidate image if one was built; otherwise :latest is already
+# correct (the container tree was unchanged this run).
+if [ "$REBUILD_IMAGE" = "true" ]; then
+  promote_image "$CANDIDATE_TAG"
+else
+  log "Container tree unchanged — keeping current :latest image."
+fi
+
+# Restart Ren; restart_and_verify rolls back the host commit if it won't boot.
+if restart_and_verify "automated nightly update $(date +%Y-%m-%d)"; then
+  log "Phase 6: deployed and verified."
+  notify_ren "$(printf '✅ *Nightly update deployed*\n\nGates green, image promoted, Ren restarted and verified.\n\n```\n%s\n```' "$SUMMARY")"
+else
+  log "Deploy verification failed — restart_and_verify handled rollback/notify."
+fi
