@@ -66,21 +66,45 @@ cp "$PROJECT_ROOT/.env" "$WORKTREE_DIR/.env" 2>/dev/null && log "copied .env int
 
 # ---------------------------------------------------------------------------
 # Phase 1 — Upstream framework + shared deps (tracks upstream)
+#
+# Skipped when the fork is too far behind upstream to be worth attempting
+# unattended (default threshold: 100 commits). /update-nanoclaw is
+# conflict-resolution work — Claude Code CAN'T resolve hundreds of commits'
+# worth of conflicts inside a 40-min agent-phase budget, so it just times out
+# and leaves the worktree in a half-merged state that fails the gates.
+# Override with NIGHTLY_UPSTREAM_MAX_DRIFT=<n> or =0 to always attempt.
+# NIGHTLY_SKIP_UPSTREAM=true skips unconditionally.
 # ---------------------------------------------------------------------------
+UPSTREAM_MAX_DRIFT="${NIGHTLY_UPSTREAM_MAX_DRIFT:-100}"
 if [ "$GATES_ONLY" = false ]; then
   log "Phase 1: upstream sync"
   git -C "$PROJECT_ROOT" fetch upstream 2>&1 | tee -a "$PROJECT_ROOT/logs/nightly.log" || log "WARN: upstream fetch failed"
   NEW_COMMITS=$(git -C "$PROJECT_ROOT" rev-list --count "HEAD..upstream/main" 2>/dev/null || echo 0)
   log "Upstream has $NEW_COMMITS new commit(s)"
-  if [ "$NEW_COMMITS" != "0" ]; then
+  if [ "${NIGHTLY_SKIP_UPSTREAM:-}" = "true" ]; then
+    log "Phase 1: SKIPPED (NIGHTLY_SKIP_UPSTREAM=true)"
+  elif [ "$NEW_COMMITS" = "0" ]; then
+    log "Phase 1: nothing to sync"
+  elif [ "$UPSTREAM_MAX_DRIFT" != "0" ] && [ "$NEW_COMMITS" -gt "$UPSTREAM_MAX_DRIFT" ]; then
+    log "Phase 1: SKIPPED — $NEW_COMMITS commits behind (> threshold $UPSTREAM_MAX_DRIFT). Reconcile manually with /update-nanoclaw or raise NIGHTLY_UPSTREAM_MAX_DRIFT."
+  else
     run_claude "update-nanoclaw" "Run /update-nanoclaw to bring upstream changes into this customized install. Work entirely inside $WORKTREE_DIR. Apply only changes relevant to how this install is used (Telegram, not WhatsApp; Google MCP). Reconcile dependency versions toward upstream's. Do NOT push, restart, or deploy — just leave the reconciled changes in the worktree. Do not run the gate stack; the pipeline does that."
   fi
 
   # -------------------------------------------------------------------------
   # Phase 2 — Channel adapters + providers (tracks their branches)
+  #
+  # This fork's origin has no `channels`/`providers` branches (they only live
+  # upstream), so /update-skills has nothing to fetch and just times out.
+  # Auto-detect and skip. Override with NIGHTLY_SKIP_SKILLS=false to force.
   # -------------------------------------------------------------------------
   log "Phase 2: skills update"
-  run_claude "update-skills" "Run /update-skills to re-apply installed skills and pull their latest code and pinned dependency versions from the channels/providers branches. Work inside $WORKTREE_DIR. Do NOT push, restart, or deploy. Do not run the gate stack."
+  SKILL_BRANCHES=$(git ls-remote --heads origin channels providers 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${NIGHTLY_SKIP_SKILLS:-}" = "true" ] || { [ "${NIGHTLY_SKIP_SKILLS:-}" != "false" ] && [ "$SKILL_BRANCHES" = "0" ]; }; then
+    log "Phase 2: SKIPPED (no channels/providers branches on origin — /update-skills has nothing to fetch)"
+  else
+    run_claude "update-skills" "Run /update-skills to re-apply installed skills and pull their latest code and pinned dependency versions from the channels/providers branches. Work inside $WORKTREE_DIR. Do NOT push, restart, or deploy. Do not run the gate stack."
+  fi
 
   # -------------------------------------------------------------------------
   # Phase 3 — Local-only deps, full-auto including majors
