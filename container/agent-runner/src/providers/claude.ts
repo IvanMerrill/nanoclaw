@@ -1,4 +1,9 @@
-import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query as sdkQuery,
+  type AgentDefinition,
+  type HookCallback,
+  type PreCompactHookInput,
+} from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/container-state.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
@@ -199,6 +204,7 @@ export class ClaudeProvider implements AgentProvider {
   private env: Record<string, string | undefined>;
   private additionalDirectories?: string[];
   private memorySessionHook?: MemorySessionHookRegistration;
+  private agents?: Record<string, AgentDefinition>;
 
   /**
    * `configuration` is the contract's configuration as resolved by core
@@ -211,6 +217,7 @@ export class ClaudeProvider implements AgentProvider {
     this.additionalDirectories = options.additionalDirectories;
     this.inference = configuration.inference as ReturnType<typeof resolveClaudeInference>;
     this.executionPolicy = configuration.executionPolicy as ReturnType<typeof resolveClaudeExecutionPolicy>;
+    this.agents = options.agents;
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -258,15 +265,24 @@ export class ClaudeProvider implements AgentProvider {
         resume: input.continuation,
         pathToClaudeCodeExecutable: '/pnpm/claude',
         // The append (agent name + destinations) is rebuilt at every container
-        // start. Left to the SDK default, Claude Code records the prompt on a
-        // session's first request and resends that record on every resume, so
-        // a resumed agent would keep its old name and destination list until
-        // compaction. snapshot: false renders it fresh each time.
+        // start. The SDK records the systemPrompt on a Claude session's first
+        // request and reuses that record across resumes — no supported opt-out
+        // as of this SDK version (the old `snapshot: false` was removed) — so
+        // if the append changes between the first spawn and a later respawn
+        // within the same session, the resumed agent keeps the original
+        // append until compaction rewrites the system prompt. In practice
+        // this only bites when destinations/name change mid-session; a fresh
+        // session (no `resume`) always picks up the current values.
         systemPrompt: instructions
-          ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions, snapshot: false }
+          ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions }
           : undefined,
         allowedTools: [...this.mcp.allowedTools],
         disallowedTools: [...this.executionPolicy.disallowedTools],
+        // Pre-declared subagents (from container_configs.agents). Each entry
+        // becomes a `subagent_type` on the SDK's built-in Task tool; the
+        // SDK enforces its `tools` allowlist, so the caller cannot widen the
+        // subagent's tool access per invocation.
+        agents: this.agents,
         env: this.env,
         model: this.inference.model,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

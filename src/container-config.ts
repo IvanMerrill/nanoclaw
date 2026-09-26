@@ -235,6 +235,23 @@ export interface AdditionalMountConfig {
   readonly?: boolean;
 }
 
+/**
+ * Pre-declared subagent definition. Mirrors the shape the Claude Agent SDK
+ * accepts as `agents: Record<string, AgentDefinition>`. The container passes
+ * this straight through to `sdkQuery` so the SDK's built-in Task tool exposes
+ * each entry as a `subagent_type` with its `tools` allowlist enforced by the
+ * SDK — the caller cannot widen it per call.
+ *
+ * Kept as a local mirror rather than an import from the SDK so the host tree
+ * stays independent of container-only packages.
+ */
+export interface AgentDefinition {
+  description: string;
+  prompt: string;
+  tools?: string[];
+  disallowedTools?: string[];
+}
+
 /** Shape of the materialized `container.json` file read by the container runner. */
 export interface ContainerConfig {
   mcpServers: Record<string, McpServerConfig>;
@@ -249,6 +266,8 @@ export interface ContainerConfig {
   maxMessagesPerPrompt?: number;
   model?: string;
   effort?: string;
+  /** Pre-declared subagents; empty/absent means the SDK's default (no custom subagents). */
+  agents?: Record<string, AgentDefinition>;
   /**
    * Legacy mirror of `speed: 'fast'`, written exactly as the host did before
    * `speed` existed so an agent image built then keeps fast mode working.
@@ -359,6 +378,49 @@ export function parseSkillSelection(raw: string | undefined, groupName: string):
   return 'all';
 }
 
+/**
+ * Read the stored `agents` JSON column, drop entries missing the two SDK-required
+ * fields (`description`, `prompt`), and coerce `tools`/`disallowedTools` to string
+ * arrays. Returns undefined when nothing survives — the ContainerConfig field is
+ * omitted so container.json stays clean and the SDK's default applies.
+ */
+export function parseStoredAgents(
+  raw: string | undefined | null,
+  groupName: string,
+): Record<string, AgentDefinition> | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    log.warn('Stored agents JSON is not parseable; ignoring', { group: groupName });
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    log.warn('Stored agents is not an object; ignoring', { group: groupName });
+    return undefined;
+  }
+  const out: Record<string, AgentDefinition> = {};
+  for (const [name, entry] of Object.entries(parsed)) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      log.warn('Dropping invalid stored agent (not an object)', { group: groupName, agent: name });
+      continue;
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.description !== 'string' || typeof e.prompt !== 'string') {
+      log.warn('Dropping stored agent missing description or prompt', { group: groupName, agent: name });
+      continue;
+    }
+    const def: AgentDefinition = { description: e.description, prompt: e.prompt };
+    if (Array.isArray(e.tools) && e.tools.every((t) => typeof t === 'string')) def.tools = e.tools as string[];
+    if (Array.isArray(e.disallowedTools) && e.disallowedTools.every((t) => typeof t === 'string')) {
+      def.disallowedTools = e.disallowedTools as string[];
+    }
+    out[name] = def;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
 export function configFromDb(row: ContainerConfigRow, group: AgentGroup): ContainerConfig {
   return {
@@ -383,6 +445,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     ...speedFields(parseContainerSpeed(row.speed) ?? (FAST_MODE ? 'fast' : undefined)),
     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
     runtimeTier: parseRuntimeTier(row.runtime_tier, group.name),
+    agents: parseStoredAgents(row.agents, group.name),
   };
 }
 

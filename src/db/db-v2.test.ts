@@ -478,6 +478,7 @@ describe('container configs', () => {
       packages_npm: '[]',
       additional_mounts: '[]',
       cli_scope: 'global',
+      agents: '{}',
       timezone: null,
       speed: null,
       updated_at: now(),

@@ -222,7 +222,12 @@ run_gates() {
   _gate "host-typecheck+build"  bash -c "cd '$root' && pnpm run build" || return 1
   _gate "container-typecheck"   bash -c "cd '$root' && pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit" || return 1
   _gate "google-mcp-build"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm run build" || return 1
-  _gate "host-tests"            bash -c "cd '$root' && pnpm test" || return 1
+  # Not `pnpm test`: upstream's scripts/update/transaction.e2e.test.ts simulates
+  # service cutover + fs snapshots and needs 10-20s per test on this box; at
+  # vitest's 5000ms default it fails 2-7 tests every night with no real defect
+  # (all 14 pass at 60s). vitest.config.ts is upstream-owned, so the ceiling
+  # lives here in the fork's own gate instead.
+  _gate "host-tests"            bash -c "cd '$root' && pnpm exec vitest run --testTimeout=60000" || return 1
   _gate "agent-runner-tests"    bash -c "cd '$root/container/agent-runner' && bun test" || return 1
   _gate "google-mcp-tests"      bash -c "cd '$root/container/nanoclaw-google-mcp' && npm test" || return 1
 

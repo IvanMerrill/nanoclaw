@@ -23,18 +23,17 @@ fi
 # ---- Docker: prune unused images/containers ----
 if command -v docker &>/dev/null; then
   log "Pruning Docker..."
-  # Deliberately aggressive: images and build cache are rebuildable, and disk is
-  # the scarce resource on this box. An "until=168h" filter was tried first and
-  # was structurally unable to fire — the agent image rebuilds nightly, so every
-  # cache entry is always younger than the cutoff. It had silently grown back to
-  # 51 entries / 14.9GB before that was spotted.
-  #
   # Volumes are deliberately NOT pruned: they hold state, not rebuildable
   # artifacts, and a briefly-stopped container would lose its data.
   docker container prune -f 2>&1 || log "WARN: Docker container prune failed"
-  # -a drops every image without a running container. The live Ren image is
-  # protected by being in use.
-  docker image prune -af 2>&1 || log "WARN: Docker image prune failed"
+  # NOT -a: session containers are ephemeral (idle-exit), so at maintenance
+  # time the nanoclaw-agent images are not attached to any running container
+  # and -a wipes them. The next scheduled task then loops on image-unavailable
+  # until someone rebuilds. Dangling prune still cleans old image versions
+  # after a rebuild — they lose their tag and become dangling.
+  docker image prune -f 2>&1 || log "WARN: Docker image prune failed"
+  # Build cache is a separate large consumer; safe to purge aggressively — it
+  # only means the next rebuild is slower, not that images disappear.
   docker builder prune -af 2>&1 || log "WARN: Docker builder prune failed"
 else
   log "Docker not found, skipping prune"

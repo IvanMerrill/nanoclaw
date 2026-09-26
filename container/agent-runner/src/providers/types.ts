@@ -1,3 +1,5 @@
+import type { AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
+
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 
 /**
@@ -92,6 +94,13 @@ export interface ProviderOptions {
    * keeps the provider default; a tier it did not declare never reaches it.
    */
   speed?: ProviderSpeed;
+  /**
+   * Pre-declared subagents. The Claude provider passes them straight to the
+   * SDK's `agents` option so the built-in Task tool exposes each entry as a
+   * `subagent_type` with its `tools` allowlist enforced by the SDK. Non-Claude
+   * providers ignore.
+   */
+  agents?: Record<string, AgentDefinition>;
 }
 
 export interface QueryInput {

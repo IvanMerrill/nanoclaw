@@ -7,6 +7,8 @@
  */
 import fs from 'fs';
 
+import type { AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
+
 import type { McpServerConfig, ProviderSpeed } from './providers/types.js';
 
 const CONFIG_PATH = '/workspace/agent/container.json';
@@ -21,6 +23,8 @@ export interface RunnerConfig {
   model?: string;
   effort?: string;
   speed?: ProviderSpeed;
+  /** Pre-declared subagents, passed straight to the Claude SDK's `agents` option. */
+  agents?: Record<string, AgentDefinition>;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -58,7 +62,19 @@ export function runnerConfigFromRaw(raw: Record<string, unknown>): RunnerConfig 
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
     speed: readSpeed(raw),
+    agents: readAgents(raw),
   };
+}
+
+/**
+ * Container.json is written by the host's sanitizer (parseStoredAgents), so
+ * anything here is already shape-checked. Undefined at reader time means the
+ * SDK sees no `agents` option and its default applies.
+ */
+function readAgents(raw: Record<string, unknown>): Record<string, AgentDefinition> | undefined {
+  const value = raw.agents;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, AgentDefinition>;
 }
 
 /**
