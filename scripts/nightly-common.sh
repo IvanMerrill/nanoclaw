@@ -122,15 +122,54 @@ rebuild_container() {
   CONTAINER_RUNTIME=docker "$PROJECT_ROOT/container/build.sh" 2>&1
 }
 
+# launchd label for THIS install (e.g. com.nanoclaw-v2-98989602). Same
+# NANOCLAW_PROJECT_ROOT pinning as image_base(): the slug is sha1(root)[:8].
+launchd_label_for_install() {
+  ( NANOCLAW_PROJECT_ROOT="$PROJECT_ROOT" source "$PROJECT_ROOT/setup/lib/install-slug.sh" && launchd_label )
+}
+
+# Stamp the upgrade tripwire for the commit now at HEAD, then bounce the host
+# and require a NEW host PID for this install's dist/index.js.
+#
+# Why stamp: the tripwire in src/upgrade-state.ts compares git HEAD/tree to
+# data/upgrade-state.json, and nothing else in the nightly writes it. Every
+# push/pull/revert here moves HEAD, so without a stamp the host refuses to
+# boot on its next start ("install not on the sanctioned path") — and then
+# the revert path moves HEAD again and fails the same way.
+#
+# Why a new PID: the previous check was `pgrep -f "node.*dist/index.js"`,
+# which matched the host that was ALREADY running before the kickstart, so a
+# restart that never happened still reported success. Anchoring on this
+# install's dist path also keeps another NanoClaw copy on the same box from
+# satisfying the check.
+_stamp_and_restart_host() {
+  local label old_pid new_pid i
+  label="$(launchd_label_for_install)"
+
+  ( cd "$PROJECT_ROOT" && pnpm exec tsx scripts/upgrade-state.ts set "" nightly ) 2>&1 \
+    || { log "ERROR: could not stamp upgrade-state; not restarting."; return 1; }
+
+  old_pid="$(pgrep -f -n "node .*$PROJECT_ROOT/dist/index.js" 2>/dev/null || true)"
+  log "Restarting Ren ($label, previous host pid: ${old_pid:-none})..."
+  launchctl kickstart -k "gui/$(id -u)/$label" 2>&1 \
+    || { log "ERROR: launchctl kickstart failed for $label"; return 1; }
+
+  for i in $(seq 1 15); do
+    sleep 2
+    new_pid="$(pgrep -f -n "node .*$PROJECT_ROOT/dist/index.js" 2>/dev/null || true)"
+    if [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ]; then
+      log "Ren started successfully (host pid $new_pid)."
+      return 0
+    fi
+  done
+  log "ERROR: no new host pid for $label after 30s (last seen: ${new_pid:-none}, previous: ${old_pid:-none})."
+  return 1
+}
+
 restart_and_verify() {
   local commit_desc="${1:-}"
 
-  log "Restarting Ren..."
-  launchctl kickstart -k "gui/$(id -u)/com.nanoclaw"
-  sleep 8
-
-  if pgrep -f "node.*dist/index.js" > /dev/null 2>&1; then
-    log "Ren started successfully."
+  if _stamp_and_restart_host; then
     return 0
   fi
 
@@ -142,10 +181,9 @@ restart_and_verify() {
   pnpm install --frozen-lockfile 2>&1
   pnpm run build 2>&1
   git push origin main 2>&1
-  launchctl kickstart -k "gui/$(id -u)/com.nanoclaw"
-  sleep 8
 
-  if pgrep -f "node.*dist/index.js" > /dev/null 2>&1; then
+  # The revert is a new commit, so it needs its own stamp before the bounce.
+  if _stamp_and_restart_host; then
     notify_ren "$(printf '⚠️ *Nightly update rolled back*\n\nThe update from last night broke my startup. I reverted the commit and I am running again, but you should review what went wrong.\n\n%s\n\nCheck logs for details.' "$commit_desc")"
     log "Rollback successful — Ren is running again."
   else
